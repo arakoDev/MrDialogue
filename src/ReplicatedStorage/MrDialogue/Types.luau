@@ -1,9 +1,20 @@
 --!strict
 
+export type Session = {
+	Player: Player,
+	DialogueId: string,
+	IsActive: (self: Session) -> boolean,
+}
+
+export type SessionOptions = {
+	npc: Instance?,
+	data: { [string]: any }?,
+}
+
 export type DialogueContext = {
 	player: Player,
 	dialogueId: string,
-	session: any,
+	session: Session,
 	npc: Instance?,
 	data: { [string]: any },
 }

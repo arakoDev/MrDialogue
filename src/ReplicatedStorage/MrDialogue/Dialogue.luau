@@ -1,6 +1,7 @@
 --!strict
 
 local Types = require(script.Parent.Types)
+local SessionClass = require(script.Parent.Session)
 
 local Dialogue = {}
 Dialogue.__index = Dialogue
@@ -15,6 +16,11 @@ local SUPPORTED_NODE_TYPES = table.freeze({
 
 export type Dialogue = {
 	Id: string,
+	Start: (
+		self: Dialogue,
+		player: Player,
+		options: Types.SessionOptions?
+	) -> (SessionClass.Session?, string?),
 }
 
 type DialogueInternal = Dialogue & {
@@ -88,6 +94,14 @@ function Dialogue.new(definition: any): Dialogue
 	}, Dialogue) :: any
 
 	return table.freeze(self)
+end
+
+function Dialogue.Start(
+	self: DialogueInternal,
+	player: Player,
+	options: Types.SessionOptions?
+): (SessionClass.Session?, string?)
+	return SessionClass.new(player, self.Id, self._definition, options)
 end
 
 return table.freeze(Dialogue)

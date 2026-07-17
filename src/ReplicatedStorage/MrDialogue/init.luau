@@ -3,6 +3,8 @@
 local Types = require(script.Types)
 local DialogueClass = require(script.Dialogue)
 
+export type Session = Types.Session
+export type SessionOptions = Types.SessionOptions
 export type DialogueContext = Types.DialogueContext
 export type ConditionHandler = Types.ConditionHandler
 export type ActionHandler = Types.ActionHandler
