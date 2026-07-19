@@ -6,13 +6,15 @@ local SessionClass = require(script.Parent.Session)
 local Dialogue = {}
 Dialogue.__index = Dialogue
 
-local SUPPORTED_NODE_TYPES = table.freeze({
+local SUPPORTED_NODE_TYPES: { [string]: boolean } = {
 	line = true,
 	choice = true,
 	branch = true,
 	action = true,
 	["end"] = true,
-})
+}
+
+table.freeze(SUPPORTED_NODE_TYPES)
 
 export type Dialogue = {
 	Id: string,

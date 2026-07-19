@@ -1,7 +1,14 @@
 --!strict
 
+local RunService = game:GetService("RunService")
+
+local Net = require(script.Net)
 local Types = require(script.Types)
 local DialogueClass = require(script.Dialogue)
+
+if RunService:IsServer() then
+	Net._initializeServer()
+end
 
 export type Session = Types.Session
 export type SessionOptions = Types.SessionOptions

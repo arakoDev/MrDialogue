@@ -1,8 +1,10 @@
 --!strict
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
 
+local Net = require(script.Parent.Net)
 local Types = require(script.Parent.Types)
 
 local Session = {}
@@ -16,6 +18,7 @@ type SessionState = {
 	npc: Instance?,
 	data: { [string]: any },
 	active: boolean,
+	sessionId: string,
 }
 
 local states: { [Session]: SessionState } = setmetatable({}, { __mode = "k" }) :: any
@@ -61,6 +64,7 @@ function Session.new(
 		DialogueId = dialogueId,
 	}, Session) :: any
 	local data = if options and options.data then table.clone(options.data) else {}
+	local sessionId = HttpService:GenerateGUID(false)
 
 	states[self] = {
 		definition = definition,
@@ -68,10 +72,29 @@ function Session.new(
 		npc = if options then options.npc else nil,
 		data = data,
 		active = true,
+		sessionId = sessionId,
 	}
 	activeSessions[player] = self
 
-	return table.freeze(self) :: Session
+	local startMessage: Net.StartMessage = {
+		type = "start",
+		sessionId = sessionId,
+		dialogueId = dialogueId,
+	}
+	
+	local sent, sendError = pcall(function()
+		Net._sendToClient(player, startMessage)
+	end)
+
+	if not sent then
+		states[self] = nil
+		if activeSessions[player] == self then
+			activeSessions[player] = nil
+		end
+		error(sendError, 3)
+	end
+
+	return table.freeze(self) :: Session, nil
 end
 
 function Session.IsActive(self: Session): boolean
@@ -107,6 +130,10 @@ end
 
 function Session._getData(self: Session): { [string]: any }
 	return states[self].data
+end
+
+function Session._getSessionId(self: Session): string
+	return states[self].sessionId
 end
 
 function Session._end(self: Session): boolean
