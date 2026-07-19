@@ -15,24 +15,84 @@ export type SpeakerPayload = {
 
 export type PresentationPayload = {
 	turn: string,
-	kind: "line",
+	kind: "line" | "choice_prompt",
 	speaker: SpeakerPayload?,
 	text: string,
+}
+
+export type ChoiceOptionPayload = {
+	text: string,
+}
+
+export type ChoicesPayload = {
+	turn: string,
+	options: { ChoiceOptionPayload },
 }
 
 export type StartMessage = {
 	type: "start",
 	sessionId: string,
 	dialogueId: string,
-	presentation: PresentationPayload,
+	presentation: PresentationPayload?,
+	choices: ChoicesPayload?,
 }
 
-export type PresentMessage = PresentationPayload & {
+export type PresentMessage = {
 	type: "present",
 	sessionId: string,
+	turn: string,
+	kind: "line" | "choice_prompt",
+	speaker: SpeakerPayload?,
+	text: string,
 }
 
-export type ServerMessage = StartMessage | PresentMessage
+export type ChoicesMessage = {
+	type: "choices",
+	sessionId: string,
+	turn: string,
+	options: { ChoiceOptionPayload },
+}
+
+export type ReadyMessage = {
+	type: "ready",
+	sessionId: string,
+	turn: string,
+	interaction: "advance" | "finish",
+}
+
+export type EndMessage = {
+	type: "end",
+	sessionId: string,
+	result: string?,
+}
+
+export type ServerMessage =
+	StartMessage
+	| PresentMessage
+	| ChoicesMessage
+	| ReadyMessage
+	| EndMessage
+
+export type PresentationCompletedMessage = {
+	type: "presentation_completed",
+	sessionId: string,
+	turn: string,
+}
+
+export type ChooseMessage = {
+	type: "choose",
+	sessionId: string,
+	turn: string,
+	index: number,
+}
+
+export type AdvanceMessage = {
+	type: "advance",
+	sessionId: string,
+	turn: string,
+}
+
+export type ClientMessage = PresentationCompletedMessage | ChooseMessage | AdvanceMessage
 
 local cachedRemote: RemoteEvent? = nil
 
@@ -129,6 +189,14 @@ end
 
 function Net._sendToClient(player: Player, message: ServerMessage)
 	Net._initializeServer():FireClient(player, message)
+end
+
+function Net._sendToServer(message: ClientMessage)
+	Net._getClientRemote():FireServer(message)
+end
+
+function Net._connectServer(handler: (player: Player, message: any) -> ()): RBXScriptConnection
+	return Net._initializeServer().OnServerEvent:Connect(handler)
 end
 
 function Net._connectClient(handler: (message: ServerMessage) -> ()): RBXScriptConnection
