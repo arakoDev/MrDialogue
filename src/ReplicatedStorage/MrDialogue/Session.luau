@@ -19,10 +19,67 @@ type SessionState = {
 	data: { [string]: any },
 	active: boolean,
 	sessionId: string,
+	phase: "WAITING_PRESENTATION" | "FINISHED",
+	expectedTurn: string?,
 }
 
 local states: { [Session]: SessionState } = setmetatable({}, { __mode = "k" }) :: any
 local activeSessions: { [Player]: Session } = {}
+
+local function resolveSpeaker(
+	definition: Types.DialogueDefinition,
+	node: Types.LineNode
+): Net.SpeakerPayload?
+	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
+	if speakerId == nil or speakerId == false then
+		return nil
+	end
+	if type(speakerId) ~= "string" then
+		error("line speaker must be a string or false", 3)
+	end
+
+	local speakers = definition.speakers
+	local speaker = if speakers then speakers[speakerId] else nil
+	if not speaker then
+		error(`line references unknown speaker "{speakerId}"`, 3)
+	end
+
+	local icon: string? = nil
+	if node.emotion ~= nil then
+		local emotions = speaker.emotions
+		icon = if emotions then emotions[node.emotion] else nil
+		if not icon then
+			error(`line references unknown emotion "{node.emotion}" for speaker "{speakerId}"`, 3)
+		end
+	else
+		icon = speaker.icon
+	end
+
+	return {
+		name = speaker.name,
+		icon = icon or speaker.icon or definition.defaultIcon,
+	}
+end
+
+local function buildInitialLinePresentation(
+	definition: Types.DialogueDefinition
+): Net.PresentationPayload
+	local nodeId = definition.entry
+	local node = definition.nodes[nodeId]
+	if node.type ~= "line" then
+		error(
+			`Dialogue:Start entry node "{nodeId}" must be a line until node traversal is implemented`,
+			4
+		)
+	end
+
+	return {
+		turn = HttpService:GenerateGUID(false),
+		kind = "line",
+		speaker = resolveSpeaker(definition, node),
+		text = node.text,
+	}
+end
 
 function Session.new(
 	player: Player,
@@ -59,12 +116,13 @@ function Session.new(
 		return nil, "player already has an active dialogue session"
 	end
 
+	local data = if options and options.data then table.clone(options.data) else {}
+	local sessionId = HttpService:GenerateGUID(false)
+	local presentation = buildInitialLinePresentation(definition)
 	local self = setmetatable({
 		Player = player,
 		DialogueId = dialogueId,
 	}, Session) :: any
-	local data = if options and options.data then table.clone(options.data) else {}
-	local sessionId = HttpService:GenerateGUID(false)
 
 	states[self] = {
 		definition = definition,
@@ -73,6 +131,8 @@ function Session.new(
 		data = data,
 		active = true,
 		sessionId = sessionId,
+		phase = "WAITING_PRESENTATION",
+		expectedTurn = presentation.turn,
 	}
 	activeSessions[player] = self
 
@@ -80,8 +140,9 @@ function Session.new(
 		type = "start",
 		sessionId = sessionId,
 		dialogueId = dialogueId,
+		presentation = presentation,
 	}
-	
+
 	local sent, sendError = pcall(function()
 		Net._sendToClient(player, startMessage)
 	end)
@@ -144,6 +205,8 @@ function Session._end(self: Session): boolean
 	end
 
 	state.active = false
+	state.phase = "FINISHED"
+	state.expectedTurn = nil
 
 	if activeSessions[self.Player] == self then
 		activeSessions[self.Player] = nil

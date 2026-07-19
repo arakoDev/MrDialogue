@@ -8,11 +8,31 @@ local REMOTE_NAME = "DialogueRemote"
 
 local Net = {}
 
+export type SpeakerPayload = {
+	name: string,
+	icon: string?,
+}
+
+export type PresentationPayload = {
+	turn: string,
+	kind: "line",
+	speaker: SpeakerPayload?,
+	text: string,
+}
+
 export type StartMessage = {
 	type: "start",
 	sessionId: string,
 	dialogueId: string,
+	presentation: PresentationPayload,
 }
+
+export type PresentMessage = PresentationPayload & {
+	type: "present",
+	sessionId: string,
+}
+
+export type ServerMessage = StartMessage | PresentMessage
 
 local cachedRemote: RemoteEvent? = nil
 
@@ -107,11 +127,11 @@ function Net._getClientRemote(): RemoteEvent
 	return remote
 end
 
-function Net._sendToClient(player: Player, message: StartMessage)
+function Net._sendToClient(player: Player, message: ServerMessage)
 	Net._initializeServer():FireClient(player, message)
 end
 
-function Net._connectClient(handler: (message: StartMessage) -> ()): RBXScriptConnection
+function Net._connectClient(handler: (message: ServerMessage) -> ()): RBXScriptConnection
 	return Net._getClientRemote().OnClientEvent:Connect(handler)
 end
 
