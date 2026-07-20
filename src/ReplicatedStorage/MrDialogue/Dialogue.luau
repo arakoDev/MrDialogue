@@ -25,7 +25,7 @@ export type Dialogue = {
 	) -> (SessionClass.Session?, string?),
 }
 
-type DialogueInternal = Dialogue & {_definition: Types.DialogueDefinition}
+type DialogueInternal = Dialogue & { _definition: Types.DialogueDefinition }
 
 local function assertNonEmptyString(value: any, field: string)
 	if type(value) ~= "string" or value == "" then
@@ -54,26 +54,42 @@ local function deepCopy(value: any, copies: { [any]: any }): any
 end
 
 local function validatePresentation(nodeKind: string, nodeId: string, node: any, definition: any)
-	if node.speaker ~= nil and node.speaker ~= false and (type(node.speaker) ~= "string" or node.speaker == "") then
-		error(`MrDialogue.new: {nodeKind} node "{nodeId}" speaker must be a non-empty string or false`, 4)
+	if
+		node.speaker ~= nil
+		and node.speaker ~= false
+		and (type(node.speaker) ~= "string" or node.speaker == "")
+	then
+		error(
+			`MrDialogue.new: {nodeKind} node "{nodeId}" speaker must be a non-empty string or false`,
+			4
+		)
 	end
 
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
 	if speakerId == nil or speakerId == false then
 		if node.emotion ~= nil then
-			error(`MrDialogue.new: {nodeKind} node "{nodeId}" cannot use an emotion without a speaker`, 4)
+			error(
+				`MrDialogue.new: {nodeKind} node "{nodeId}" cannot use an emotion without a speaker`,
+				4
+			)
 		end
 		return
 	end
 
 	if type(speakerId) ~= "string" or speakerId == "" then
-		error(`MrDialogue.new: {nodeKind} node "{nodeId}" speaker must be a non-empty string or false`, 4)
+		error(
+			`MrDialogue.new: {nodeKind} node "{nodeId}" speaker must be a non-empty string or false`,
+			4
+		)
 	end
 
 	local speakers = definition.speakers
 	local speaker = if type(speakers) == "table" then speakers[speakerId] else nil
 	if type(speaker) ~= "table" then
-		error(`MrDialogue.new: {nodeKind} node "{nodeId}" references unknown speaker "{speakerId}"`, 4)
+		error(
+			`MrDialogue.new: {nodeKind} node "{nodeId}" references unknown speaker "{speakerId}"`,
+			4
+		)
 	end
 
 	if type(speaker.name) ~= "string" or speaker.name == "" then
@@ -82,13 +98,19 @@ local function validatePresentation(nodeKind: string, nodeId: string, node: any,
 
 	if node.emotion ~= nil then
 		if type(node.emotion) ~= "string" or node.emotion == "" then
-			error(`MrDialogue.new: {nodeKind} node "{nodeId}" emotion must be a non-empty string`, 4)
+			error(
+				`MrDialogue.new: {nodeKind} node "{nodeId}" emotion must be a non-empty string`,
+				4
+			)
 		end
 
 		local emotions = speaker.emotions
 		local emotionIcon = if type(emotions) == "table" then emotions[node.emotion] else nil
 		if type(emotionIcon) ~= "string" or emotionIcon == "" then
-			error(`MrDialogue.new: {nodeKind} node "{nodeId}" references unknown emotion "{node.emotion}"`, 4)
+			error(
+				`MrDialogue.new: {nodeKind} node "{nodeId}" references unknown emotion "{node.emotion}"`,
+				4
+			)
 		end
 	elseif speaker.icon ~= nil then
 		if type(speaker.icon) ~= "string" or speaker.icon == "" then
@@ -119,7 +141,10 @@ local function validateLine(nodeId: string, node: any, definition: any)
 			error(`MrDialogue.new: line node "{nodeId}" target "{node.next}" does not exist`, 4)
 		end
 		if target.type ~= "line" and target.type ~= "choice" and target.type ~= "end" then
-			error(`MrDialogue.new: line node "{nodeId}" target must be a line, choice, or end until node traversal is implemented`, 4)
+			error(
+				`MrDialogue.new: line node "{nodeId}" target must be a line, choice, or end until node traversal is implemented`,
+				4
+			)
 		end
 	end
 end
@@ -174,15 +199,24 @@ local function validateChoice(nodeId: string, node: any, definition: any)
 		end
 
 		if option.condition ~= nil then
-			error(`MrDialogue.new: choice node "{nodeId}" option {index} conditions are not implemented yet`, 4)
+			error(
+				`MrDialogue.new: choice node "{nodeId}" option {index} conditions are not implemented yet`,
+				4
+			)
 		end
 
 		local target = definition.nodes[option.next]
 		if type(target) ~= "table" then
-			error(`MrDialogue.new: choice node "{nodeId}" option {index} target "{option.next}" does not exist`, 4)
+			error(
+				`MrDialogue.new: choice node "{nodeId}" option {index} target "{option.next}" does not exist`,
+				4
+			)
 		end
 		if target.type ~= "line" and target.type ~= "choice" and target.type ~= "end" then
-			error(`MrDialogue.new: choice node "{nodeId}" option {index} target must be a line, choice, or end until node traversal is implemented`, 4)
+			error(
+				`MrDialogue.new: choice node "{nodeId}" option {index} target must be a line, choice, or end until node traversal is implemented`,
+				4
+			)
 		end
 	end
 end
@@ -244,7 +278,11 @@ function Dialogue.new(definition: any): Dialogue
 	return table.freeze(self)
 end
 
-function Dialogue.Start(self: DialogueInternal, player: Player, options: Types.SessionOptions?): (SessionClass.Session?, string?)
+function Dialogue.Start(
+	self: DialogueInternal,
+	player: Player,
+	options: Types.SessionOptions?
+): (SessionClass.Session?, string?)
 	return SessionClass.new(player, self.Id, self._definition, options)
 end
 

@@ -42,7 +42,10 @@ type PreparedNode = {
 local states: { [Session]: SessionState } = setmetatable({}, { __mode = "k" }) :: any
 local activeSessions: { [Player]: Session } = {}
 
-local function resolveSpeaker(definition: Types.DialogueDefinition, node: Types.LineNode | Types.ChoiceNode): Net.SpeakerPayload?
+local function resolveSpeaker(
+	definition: Types.DialogueDefinition,
+	node: Types.LineNode | Types.ChoiceNode
+): Net.SpeakerPayload?
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
 	if speakerId == nil or speakerId == false then
 		return nil
@@ -149,7 +152,12 @@ local function applyPreparedNode(state: SessionState, prepared: PreparedNode)
 	state.offeredOptions = prepared.offeredOptions
 end
 
-function Session.new(player: Player, dialogueId: string, definition: Types.DialogueDefinition, options: Types.SessionOptions?): (Session?, string?)
+function Session.new(
+	player: Player,
+	dialogueId: string,
+	definition: Types.DialogueDefinition,
+	options: Types.SessionOptions?
+): (Session?, string?)
 	if not RunService:IsServer() then
 		error("Dialogue:Start can only be called on the server", 3)
 	end
@@ -259,7 +267,12 @@ local function sendPreparedNode(self: Session, state: SessionState, prepared: Pr
 	applyPreparedNode(state, prepared)
 end
 
-local function sendReady(self: Session, state: SessionState, phase: "READY_TO_ADVANCE" | "READY_TO_FINISH", interaction: "advance" | "finish")
+local function sendReady(
+	self: Session,
+	state: SessionState,
+	phase: "READY_TO_ADVANCE" | "READY_TO_FINISH",
+	interaction: "advance" | "finish"
+)
 	local turn = HttpService:GenerateGUID(false)
 	local message: Net.ReadyMessage = {
 		type = "ready",
@@ -291,7 +304,11 @@ local function endSession(self: Session, state: SessionState, result: string?)
 end
 
 local function handlePresentationCompleted(self: Session, state: SessionState, message: any)
-	if state.phase ~= "WAITING_PRESENTATION" or type(message.turn) ~= "string" or message.turn ~= state.expectedTurn then
+	if
+		state.phase ~= "WAITING_PRESENTATION"
+		or type(message.turn) ~= "string"
+		or message.turn ~= state.expectedTurn
+	then
 		return
 	end
 
@@ -325,7 +342,11 @@ local function moveToNode(self: Session, state: SessionState, nodeId: string)
 end
 
 local function handleAdvance(self: Session, state: SessionState, message: any)
-	if (state.phase ~= "READY_TO_ADVANCE" and state.phase ~= "READY_TO_FINISH") or type(message.turn) ~= "string" or message.turn ~= state.expectedTurn then
+	if
+		(state.phase ~= "READY_TO_ADVANCE" and state.phase ~= "READY_TO_FINISH")
+		or type(message.turn) ~= "string"
+		or message.turn ~= state.expectedTurn
+	then
 		return
 	end
 
@@ -343,7 +364,13 @@ local function handleAdvance(self: Session, state: SessionState, message: any)
 end
 
 local function handleChoose(self: Session, state: SessionState, message: any)
-	if state.phase ~= "WAITING_CHOICE" or type(message.turn) ~= "string" or message.turn ~= state.expectedTurn or type(message.index) ~= "number" or message.index % 1 ~= 0 then
+	if
+		state.phase ~= "WAITING_CHOICE"
+		or type(message.turn) ~= "string"
+		or message.turn ~= state.expectedTurn
+		or type(message.index) ~= "number"
+		or message.index % 1 ~= 0
+	then
 		return
 	end
 
@@ -363,7 +390,13 @@ local function handleClientMessage(player: Player, message: any)
 
 	local self = activeSessions[player]
 	local state = if self then states[self] else nil
-	if not self or not state or not state.active or type(message.sessionId) ~= "string" or message.sessionId ~= state.sessionId then
+	if
+		not self
+		or not state
+		or not state.active
+		or type(message.sessionId) ~= "string"
+		or message.sessionId ~= state.sessionId
+	then
 		return
 	end
 

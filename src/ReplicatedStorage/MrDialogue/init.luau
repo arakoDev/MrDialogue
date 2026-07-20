@@ -2,13 +2,15 @@
 
 local RunService = game:GetService("RunService")
 
+if RunService:IsClient() then
+	return require(script.Client) :: any
+end
+
 local Net = require(script.Net)
 local Types = require(script.Types)
 local DialogueClass = require(script.Dialogue)
 
-if RunService:IsServer() then
-	Net._initializeServer()
-end
+Net._initializeServer()
 
 export type Session = Types.Session
 export type SessionOptions = Types.SessionOptions
@@ -34,4 +36,4 @@ function MrDialogue.new(definition: Types.DialogueDefinition): DialogueClass.Dia
 	return DialogueClass.new(definition)
 end
 
-return table.freeze(MrDialogue)
+return table.freeze(MrDialogue) :: any
