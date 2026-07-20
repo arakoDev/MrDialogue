@@ -41,7 +41,13 @@ export type Adapter = {
 		options: { Net.ChoiceOptionPayload },
 		actions: ChoiceActions
 	) -> (),
-	OnEnd: (self: Adapter, outcome: { status: "completed", result: string? }) -> (),
+	OnEnd: (
+		self: Adapter,
+		outcome: {
+			status: "completed",
+			result: string?,
+		}
+	) -> (),
 }
 
 export type ClientRuntime = {
@@ -64,16 +70,17 @@ type ClientRuntimeState = {
 	turn: string?,
 }
 
-local states: { [ClientRuntime]: ClientRuntimeState } = setmetatable({}, { __mode = "k" }) :: any
+local states: { [ClientRuntime]: ClientRuntimeState } =
+	setmetatable({}, { __mode = "k" }) :: any
 
-local ADAPTER_METHODS = table.freeze({
+local ADAPTER_METHODS = {
 	"OnShow",
 	"OnPresentation",
 	"OnAdvanceReady",
 	"OnFinishReady",
 	"OnChoices",
 	"OnEnd",
-})
+}
 
 local function validateAdapter(adapter: any)
 	if type(adapter) ~= "table" then
@@ -93,20 +100,26 @@ local function isCurrent(
 	phase: ClientPhase,
 	turn: string
 ): boolean
-	return state.sessionId == sessionId and state.phase == phase and state.turn == turn
+	return state.sessionId == sessionId
+		and state.phase == phase
+		and state.turn == turn
 end
 
-local function showPresentation(state: ClientRuntimeState, presentation: Net.PresentationPayload)
+local function showPresentation(
+	state: ClientRuntimeState,
+	presentation: Net.PresentationPayload
+)
 	local sessionId = state.sessionId
 	if not sessionId then
 		return
 	end
 
 	local turn = presentation.turn
+
 	state.phase = "WAITING_PRESENTATION"
 	state.turn = turn
 
-	local actions: PresentationActions = table.freeze({
+	local actions: PresentationActions = {
 		presentationCompleted = function()
 			if
 				state.sessionId ~= sessionId
@@ -118,23 +131,28 @@ local function showPresentation(state: ClientRuntimeState, presentation: Net.Pre
 
 			state.phase = "WAITING_SERVER"
 			state.turn = nil
+
 			Net._sendToServer({
 				type = "presentation_completed",
 				sessionId = sessionId,
 				turn = turn,
 			})
 		end,
-	})
+	}
 
 	local presentationInfo: PresentationInfo = {
 		kind = presentation.kind,
 		speaker = presentation.speaker,
 		text = presentation.text,
 	}
+
 	state.adapter:OnPresentation(presentationInfo, actions)
 end
 
-local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayload)
+local function showChoices(
+	state: ClientRuntimeState,
+	choices: Net.ChoicesPayload
+)
 	local sessionId = state.sessionId
 	if not sessionId then
 		return
@@ -142,10 +160,11 @@ local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayloa
 
 	local turn = choices.turn
 	local optionCount = #choices.options
+
 	state.phase = "WAITING_CHOICE"
 	state.turn = turn
 
-	local actions: ChoiceActions = table.freeze({
+	local actions: ChoiceActions = {
 		choose = function(index: number)
 			if
 				state.sessionId ~= sessionId
@@ -161,6 +180,7 @@ local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayloa
 
 			state.phase = "WAITING_SERVER"
 			state.turn = nil
+
 			Net._sendToServer({
 				type = "choose",
 				sessionId = sessionId,
@@ -168,12 +188,15 @@ local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayloa
 				index = index,
 			})
 		end,
-	})
+	}
 
 	state.adapter:OnChoices(choices.options, actions)
 end
 
-local function showReady(state: ClientRuntimeState, message: Net.ReadyMessage)
+local function showReady(
+	state: ClientRuntimeState,
+	message: Net.ReadyMessage
+)
 	local sessionId = state.sessionId
 	if not sessionId or state.phase ~= "WAITING_SERVER" then
 		return
@@ -184,7 +207,8 @@ local function showReady(state: ClientRuntimeState, message: Net.ReadyMessage)
 
 	if message.interaction == "advance" then
 		state.phase = "READY_TO_ADVANCE"
-		local actions: AdvanceActions = table.freeze({
+
+		local actions: AdvanceActions = {
 			advance = function()
 				if not isCurrent(state, sessionId, "READY_TO_ADVANCE", turn) then
 					return
@@ -192,17 +216,20 @@ local function showReady(state: ClientRuntimeState, message: Net.ReadyMessage)
 
 				state.phase = "WAITING_SERVER"
 				state.turn = nil
+
 				Net._sendToServer({
 					type = "advance",
 					sessionId = sessionId,
 					turn = turn,
 				})
 			end,
-		})
+		}
+
 		state.adapter:OnAdvanceReady(actions)
 	else
 		state.phase = "READY_TO_FINISH"
-		local actions: FinishActions = table.freeze({
+
+		local actions: FinishActions = {
 			finish = function()
 				if not isCurrent(state, sessionId, "READY_TO_FINISH", turn) then
 					return
@@ -210,29 +237,36 @@ local function showReady(state: ClientRuntimeState, message: Net.ReadyMessage)
 
 				state.phase = "WAITING_SERVER"
 				state.turn = nil
+
 				Net._sendToServer({
 					type = "advance",
 					sessionId = sessionId,
 					turn = turn,
 				})
 			end,
-		})
+		}
+
 		state.adapter:OnFinishReady(actions)
 	end
 end
 
-local function handleStart(state: ClientRuntimeState, message: Net.StartMessage)
+local function handleStart(
+	state: ClientRuntimeState,
+	message: Net.StartMessage
+)
 	if state.sessionId ~= nil then
 		return
 	end
 
 	local presentation = message.presentation
 	local choices = message.choices
+
 	if (presentation == nil) == (choices == nil) then
 		return
 	end
 
 	state.sessionId = message.sessionId
+
 	state.adapter:OnShow({
 		dialogueId = message.dialogueId,
 	})
@@ -244,7 +278,10 @@ local function handleStart(state: ClientRuntimeState, message: Net.StartMessage)
 	end
 end
 
-local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessage)
+local function handleMessage(
+	state: ClientRuntimeState,
+	message: Net.ServerMessage
+)
 	if message.type == "start" then
 		handleStart(state, message)
 		return
@@ -258,6 +295,7 @@ local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessa
 		if state.phase ~= "WAITING_SERVER" then
 			return
 		end
+
 		showPresentation(state, {
 			turn = message.turn,
 			kind = message.kind,
@@ -268,6 +306,7 @@ local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessa
 		if state.phase ~= "WAITING_SERVER" then
 			return
 		end
+
 		showChoices(state, {
 			turn = message.turn,
 			options = message.options,
@@ -275,13 +314,18 @@ local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessa
 	elseif message.type == "ready" then
 		showReady(state, message)
 	elseif message.type == "end" then
-		local outcome = {
-			status = "completed" :: "completed",
+		local outcome: {
+			status: "completed",
+			result: string?,
+		} = {
+			status = "completed",
 			result = message.result,
 		}
+
 		state.phase = "IDLE"
 		state.sessionId = nil
 		state.turn = nil
+
 		state.adapter:OnEnd(outcome)
 	end
 end
@@ -290,6 +334,7 @@ function ClientRuntime.new(adapter: any): ClientRuntime
 	validateAdapter(adapter)
 
 	local self = setmetatable({}, ClientRuntime) :: any
+
 	local state: ClientRuntimeState = {
 		adapter = adapter,
 		connection = nil,
@@ -297,8 +342,10 @@ function ClientRuntime.new(adapter: any): ClientRuntime
 		sessionId = nil,
 		turn = nil,
 	}
+
 	states[self] = state
-	state.connection = Net._connectClient(function(message)
+
+	state.connection = Net._connectClient(function(message: Net.ServerMessage)
 		handleMessage(state, message)
 	end)
 
@@ -307,6 +354,7 @@ end
 
 function ClientRuntime.IsActive(self: ClientRuntime): boolean
 	local state = states[self]
+
 	return state ~= nil and state.sessionId ~= nil
 end
 

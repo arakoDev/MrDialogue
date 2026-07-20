@@ -7,9 +7,13 @@ if not RunService:IsClient() then
 end
 
 local ClientRuntimeClass = require(script.Parent.ClientRuntime)
+local TypewriterClass = require(script.Parent.Typewriter)
 
 export type Adapter = ClientRuntimeClass.Adapter
 export type ClientRuntime = ClientRuntimeClass.ClientRuntime
+export type Typewriter = TypewriterClass.Typewriter
+export type TypewriterConfig = TypewriterClass.TypewriterConfig
+export type TypewriterCompletionOutcome = TypewriterClass.CompletionOutcome
 
 export type StartConfig = {
 	adapter: Adapter,
@@ -17,6 +21,8 @@ export type StartConfig = {
 
 local Client = {}
 local runtime: ClientRuntime? = nil
+
+Client.Typewriter = TypewriterClass
 
 function Client.Start(config: StartConfig): ClientRuntime
 	if type(config) ~= "table" then

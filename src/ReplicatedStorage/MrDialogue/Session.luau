@@ -82,13 +82,15 @@ end
 
 local function prepareChoiceOffer(node: Types.ChoiceNode): PreparedNode
 	local turn = HttpService:GenerateGUID(false)
-	local options = table.create(#node.options)
-	local offeredOptions = table.create(#node.options)
+
+	local options: { Net.ChoiceOptionPayload } = {}
+	local offeredOptions: { Types.ChoiceOption } = {}
 
 	for index, option in ipairs(node.options) do
 		options[index] = {
 			text = option.text,
 		}
+
 		offeredOptions[index] = option
 	end
 
