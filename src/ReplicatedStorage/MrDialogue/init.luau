@@ -8,6 +8,7 @@ end
 
 local Net = require(script.Net)
 local Types = require(script.Types)
+local Actions = require(script.Actions)
 local Conditions = require(script.Conditions)
 local DialogueClass = require(script.Dialogue)
 
@@ -32,6 +33,10 @@ export type DialogueDefinition = Types.DialogueDefinition
 export type Dialogue = DialogueClass.Dialogue
 
 local MrDialogue = {}
+
+function MrDialogue.RegisterAction(name: string, handler: Types.ActionHandler)
+	Actions.Register(name, handler)
+end
 
 function MrDialogue.RegisterCondition(name: string, handler: Types.ConditionHandler)
 	Conditions.Register(name, handler)

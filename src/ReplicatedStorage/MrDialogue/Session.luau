@@ -4,6 +4,7 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
 
+local Actions = require(script.Parent.Actions)
 local Conditions = require(script.Parent.Conditions)
 local Net = require(script.Parent.Net)
 local Types = require(script.Parent.Types)
@@ -33,6 +34,8 @@ type SessionState = {
 	offeredOptions: { Types.ChoiceOption }?,
 	pendingNodeId: string?,
 	pendingEndResult: string?,
+	lifecycleGeneration: number,
+	clientStarted: boolean,
 }
 
 type PreparedNode = {
@@ -50,6 +53,9 @@ type ResolvedNode = {
 }
 
 local MAX_SILENT_HOPS = 32
+local IMPLICIT_END_NODE: Types.EndNode = {
+	type = "end",
+}
 
 local states: { [Session]: SessionState } = setmetatable({}, { __mode = "k" }) :: any
 local activeSessions: { [Player]: Session } = {}
@@ -250,11 +256,59 @@ local function endSession(self: Session, state: SessionState, result: string?)
 	end
 end
 
-local function resolveNode(self: Session, state: SessionState, initialNodeId: string): ResolvedNode
+local function beginResolving(state: SessionState)
+	state.phase = "RESOLVING"
+	state.expectedTurn = nil
+	state.offeredOptions = nil
+	state.pendingNodeId = nil
+	state.pendingEndResult = nil
+end
+
+local function failAction(
+	self: Session,
+	state: SessionState,
+	actionName: string,
+	result: Actions.ExecutionResult
+)
+	local code = result.code or "ACTION_FAILED"
+	warn(`[MrDialogue][{code}] Action "{actionName}" failed: {tostring(result.details)}`)
+
+	local sent = true
+	local sendError: any = nil
+	if state.clientStarted then
+		local message: Net.EndMessage = {
+			type = "end",
+			sessionId = state.sessionId,
+			result = nil,
+		}
+		sent, sendError = pcall(function()
+			Net._sendToClient(self.Player, message)
+		end)
+	end
+
+	Session._end(self)
+	if not sent then
+		warn(
+			`[MrDialogue][END_SEND_FAILED] Failed to end action Session for "{actionName}": {tostring(
+				sendError
+			)}`
+		)
+	end
+
+	error(`action "{actionName}" failed with {code}`, 3)
+end
+
+local function resolveNode(
+	self: Session,
+	state: SessionState,
+	initialNodeId: string,
+	executeActions: boolean
+): ResolvedNode?
 	local nodeId = initialNodeId
 	local visited: { [string]: boolean } = {}
+	local silentHops = 0
 
-	for _ = 1, MAX_SILENT_HOPS do
+	while true do
 		if visited[nodeId] then
 			error(`dialogue resolution entered a silent cycle at node "{nodeId}"`, 2)
 		end
@@ -262,6 +316,11 @@ local function resolveNode(self: Session, state: SessionState, initialNodeId: st
 
 		local node = state.definition.nodes[nodeId]
 		if node.type == "branch" then
+			if silentHops >= MAX_SILENT_HOPS then
+				error(`dialogue resolution exceeded {MAX_SILENT_HOPS} silent nodes`, 2)
+			end
+			silentHops += 1
+
 			local passed = Conditions._evaluate(node.condition, makeContext(self, state))
 			nodeId = if passed then node.onTrue else node.onFalse
 		elseif node.type == "choice" and node.text == nil then
@@ -278,9 +337,49 @@ local function resolveNode(self: Session, state: SessionState, initialNodeId: st
 			if node.fallback == nil then
 				error(`choice node "{nodeId}" has no available options or fallback`, 2)
 			end
+			if silentHops >= MAX_SILENT_HOPS then
+				error(`dialogue resolution exceeded {MAX_SILENT_HOPS} silent nodes`, 2)
+			end
+			silentHops += 1
 			nodeId = node.fallback
 		elseif node.type == "action" then
-			error(`action node "{nodeId}" cannot run until actions are implemented`, 2)
+			if not executeActions then
+				return {
+					nodeId = nodeId,
+					node = node,
+					prepared = nil,
+				}
+			end
+			if silentHops >= MAX_SILENT_HOPS then
+				error(`dialogue resolution exceeded {MAX_SILENT_HOPS} silent nodes`, 2)
+			end
+			silentHops += 1
+
+			state.currentNodeId = nodeId
+			local generation = state.lifecycleGeneration
+			local result = Actions._execute(node.action, makeContext(self, state))
+
+			if
+				not state.active
+				or state.lifecycleGeneration ~= generation
+				or state.phase ~= "RESOLVING"
+				or state.currentNodeId ~= nodeId
+			then
+				return nil
+			end
+
+			if not result.success then
+				failAction(self, state, node.action.name, result)
+			end
+
+			if node.next == nil then
+				return {
+					nodeId = nodeId,
+					node = IMPLICIT_END_NODE,
+					prepared = nil,
+				}
+			end
+			nodeId = node.next
 		else
 			return {
 				nodeId = nodeId,
@@ -289,12 +388,13 @@ local function resolveNode(self: Session, state: SessionState, initialNodeId: st
 			}
 		end
 	end
-
-	error(`dialogue resolution exceeded {MAX_SILENT_HOPS} silent nodes`, 2)
 end
 
 local function moveToNode(self: Session, state: SessionState, nodeId: string)
-	local resolved = resolveNode(self, state, nodeId)
+	local resolved = resolveNode(self, state, nodeId, true)
+	if not resolved then
+		return
+	end
 	if resolved.node.type == "end" then
 		state.currentNodeId = resolved.nodeId
 		endSession(self, state, resolved.node.result)
@@ -307,7 +407,10 @@ local function moveToNode(self: Session, state: SessionState, nodeId: string)
 end
 
 local function prepareFollowingInteraction(self: Session, state: SessionState, nodeId: string)
-	local resolved = resolveNode(self, state, nodeId)
+	local resolved = resolveNode(self, state, nodeId, false)
+	if not resolved then
+		return
+	end
 	if resolved.node.type == "end" then
 		sendReady(self, state, "READY_TO_FINISH", "finish", resolved.nodeId, resolved.node.result)
 		return
@@ -369,11 +472,13 @@ function Session.new(
 		offeredOptions = nil,
 		pendingNodeId = nil,
 		pendingEndResult = nil,
+		lifecycleGeneration = 0,
+		clientStarted = false,
 	}
 	states[self] = state
 	activeSessions[player] = self
 
-	local resolvedOk, resolved = pcall(resolveNode, self, state, definition.entry)
+	local resolvedOk, resolved = pcall(resolveNode, self, state, definition.entry, true)
 	if not resolvedOk then
 		states[self] = nil
 		if activeSessions[player] == self then
@@ -382,7 +487,10 @@ function Session.new(
 		error(resolved, 3)
 	end
 
-	local initial = resolved :: ResolvedNode
+	local initial = resolved :: ResolvedNode?
+	if not initial then
+		return table.freeze(self) :: Session, nil
+	end
 	if initial.node.type == "end" then
 		state.currentNodeId = initial.nodeId
 		Session._end(self)
@@ -410,6 +518,7 @@ function Session.new(
 		end
 		error(sendError, 3)
 	end
+	state.clientStarted = true
 
 	return table.freeze(self) :: Session, nil
 end
@@ -427,6 +536,8 @@ local function handlePresentationCompleted(self: Session, state: SessionState, m
 	then
 		return
 	end
+
+	beginResolving(state)
 
 	local node = state.definition.nodes[state.currentNodeId]
 	if node.type == "line" then
@@ -460,23 +571,24 @@ local function handleAdvance(self: Session, state: SessionState, message: any)
 		return
 	end
 
-	if state.phase == "READY_TO_FINISH" then
-		local result = state.pendingEndResult
-		if state.pendingNodeId then
-			state.currentNodeId = state.pendingNodeId
+	local finishing = state.phase == "READY_TO_FINISH"
+	local pendingNodeId = state.pendingNodeId
+	local pendingEndResult = state.pendingEndResult
+	beginResolving(state)
+
+	if finishing then
+		if pendingNodeId then
+			state.currentNodeId = pendingNodeId
 		end
-		endSession(self, state, result)
+		endSession(self, state, pendingEndResult)
 		return
 	end
 
-	local pendingNodeId = state.pendingNodeId
 	if not pendingNodeId then
 		return
 	end
 
-	local prepared = prepareVisibleNode(state.definition, pendingNodeId)
-	sendPreparedNode(self, state, prepared)
-	state.currentNodeId = pendingNodeId
+	moveToNode(self, state, pendingNodeId)
 end
 
 local function handleChoose(self: Session, state: SessionState, message: any)
@@ -495,6 +607,8 @@ local function handleChoose(self: Session, state: SessionState, message: any)
 	if not option then
 		return
 	end
+
+	beginResolving(state)
 
 	if
 		option.condition and not Conditions._evaluate(option.condition, makeContext(self, state))
@@ -584,6 +698,7 @@ function Session._end(self: Session): boolean
 	end
 
 	state.active = false
+	state.lifecycleGeneration += 1
 	state.phase = "FINISHED"
 	state.expectedTurn = nil
 	state.offeredOptions = nil
