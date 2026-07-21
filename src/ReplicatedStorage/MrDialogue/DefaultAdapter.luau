@@ -1,6 +1,8 @@
 --!strict
 
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 
 local ClientRuntimeClass = require(script.Parent.ClientRuntime)
 local Net = require(script.Parent.Net)
@@ -22,6 +24,8 @@ type OptionBinding = {
 	connection: RBXScriptConnection,
 }
 
+type ContinueMode = "DISABLED" | "TYPING" | "ADVANCE" | "FINISH"
+
 type GuiReferences = {
 	gui: ScreenGui,
 	npcDialogueFrame: GuiObject,
@@ -37,14 +41,31 @@ type DefaultAdapterState = GuiReferences & {
 	typewriter: TypewriterClass.Typewriter,
 	typewriterConfig: TypewriterClass.TypewriterConfig,
 	typewriterConnection: RBXScriptConnection?,
+	continueConnection: RBXScriptConnection?,
+	inputConnection: RBXScriptConnection?,
+	continueMode: ContinueMode,
+	continueAction: (() -> ())?,
 	currentRunId: number?,
 	presentationCompleted: (() -> ())?,
 	optionBindings: { OptionBinding },
 	choiceGeneration: number,
 	choiceLocked: boolean,
+	choose: ((index: number) -> ())?,
 }
 
 local states: { [DefaultAdapter]: DefaultAdapterState } = setmetatable({}, { __mode = "k" }) :: any
+
+local NUMBER_KEYS: { [Enum.KeyCode]: number } = {
+	[Enum.KeyCode.One] = 1,
+	[Enum.KeyCode.Two] = 2,
+	[Enum.KeyCode.Three] = 3,
+	[Enum.KeyCode.Four] = 4,
+	[Enum.KeyCode.Five] = 5,
+	[Enum.KeyCode.Six] = 6,
+	[Enum.KeyCode.Seven] = 7,
+	[Enum.KeyCode.Eight] = 8,
+	[Enum.KeyCode.Nine] = 9,
+}
 
 local function getPlayerGui(): PlayerGui
 	local player = Players.LocalPlayer
@@ -191,6 +212,43 @@ local function setContinueEnabled(state: DefaultAdapterState, enabled: boolean)
 	state.continueButton.Selectable = enabled
 end
 
+local function clearDialogueSelection(state: DefaultAdapterState)
+	local selectedObject = GuiService.SelectedObject
+	if selectedObject and selectedObject:IsDescendantOf(state.gui) then
+		GuiService.SelectedObject = nil
+	end
+end
+
+local function setContinueMode(state: DefaultAdapterState, mode: ContinueMode, action: (() -> ())?)
+	state.continueMode = mode
+	state.continueAction = action
+	setContinueEnabled(state, mode ~= "DISABLED")
+
+	if mode == "DISABLED" then
+		if GuiService.SelectedObject == state.continueButton then
+			GuiService.SelectedObject = nil
+		end
+	elseif not state.optionsFrame.Visible then
+		GuiService.SelectedObject = state.continueButton
+	end
+end
+
+local function activateContinue(state: DefaultAdapterState)
+	if not state.gui.Enabled or state.optionsFrame.Visible or state.continueMode == "DISABLED" then
+		return
+	end
+
+	local mode = state.continueMode
+	local action = state.continueAction
+	setContinueMode(state, "DISABLED", nil)
+
+	if mode == "TYPING" then
+		state.typewriter:Skip()
+	elseif action then
+		action()
+	end
+end
+
 local function clearSpeaker(state: DefaultAdapterState)
 	state.npcName.Text = ""
 	state.npcName.Visible = false
@@ -212,9 +270,25 @@ local function applySpeaker(state: DefaultAdapterState, speaker: Net.SpeakerPayl
 	end
 end
 
+local function clearChoiceSelection(state: DefaultAdapterState)
+	local selectedObject = GuiService.SelectedObject
+	if not selectedObject then
+		return
+	end
+
+	for _, binding in ipairs(state.optionBindings) do
+		if selectedObject == binding.button then
+			GuiService.SelectedObject = nil
+			return
+		end
+	end
+end
+
 local function clearOptions(state: DefaultAdapterState)
+	clearChoiceSelection(state)
 	state.choiceGeneration += 1
 	state.choiceLocked = true
+	state.choose = nil
 	for _, binding in ipairs(state.optionBindings) do
 		binding.connection:Disconnect()
 		binding.button:Destroy()
@@ -237,7 +311,9 @@ local function setOptionText(button: GuiButton, text: string)
 end
 
 local function lockChoiceButtons(state: DefaultAdapterState)
+	clearChoiceSelection(state)
 	state.choiceLocked = true
+	state.choose = nil
 	for _, binding in ipairs(state.optionBindings) do
 		binding.button.Active = false
 		binding.button.AutoButtonColor = false
@@ -245,7 +321,23 @@ local function lockChoiceButtons(state: DefaultAdapterState)
 	end
 end
 
+local function activateChoice(state: DefaultAdapterState, index: number)
+	if state.choiceLocked or not state.gui.Enabled then
+		return
+	end
+
+	local binding = state.optionBindings[index]
+	local choose = state.choose
+	if not binding or not choose then
+		return
+	end
+
+	lockChoiceButtons(state)
+	choose(index)
+end
+
 local function resetPresentation(state: DefaultAdapterState)
+	setContinueMode(state, "DISABLED", nil)
 	state.currentRunId = nil
 	state.presentationCompleted = nil
 	state.typewriter:Cancel()
@@ -282,20 +374,27 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 			punctuationPause = if config then config.punctuationPause else nil,
 		},
 		typewriterConnection = nil,
+		continueConnection = nil,
+		inputConnection = nil,
+		continueMode = "DISABLED" :: ContinueMode,
+		continueAction = nil,
 		currentRunId = nil,
 		presentationCompleted = nil,
 		optionBindings = {},
 		choiceGeneration = 0,
 		choiceLocked = true,
+		choose = nil,
 	}
 	states[self] = state
 
 	state.gui.Enabled = false
+	clearDialogueSelection(state)
 	state.optionsFrame.Visible = false
 	state.optionTemplate.Visible = false
 	state.optionTemplate.Active = false
+	state.optionTemplate.Selectable = false
 	state.optionTemplate.AutoButtonColor = false
-	setContinueEnabled(state, false)
+	setContinueMode(state, "DISABLED", nil)
 	state.typewriterConnection = typewriter.Completed:Connect(function(runId, outcome)
 		if
 			state.currentRunId ~= runId
@@ -308,8 +407,37 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		local presentationCompleted = state.presentationCompleted
 		state.currentRunId = nil
 		state.presentationCompleted = nil
-		setContinueEnabled(state, false)
+		setContinueMode(state, "DISABLED", nil)
 		presentationCompleted()
+	end)
+	state.continueConnection = state.continueButton.Activated:Connect(function()
+		activateContinue(state)
+	end)
+	state.inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+		if
+			gameProcessedEvent
+			or not state.gui.Enabled
+			or UserInputService:GetFocusedTextBox() ~= nil
+		then
+			return
+		end
+
+		local keyCode = input.KeyCode
+		if state.optionsFrame.Visible then
+			local optionIndex = NUMBER_KEYS[keyCode]
+			if optionIndex then
+				activateChoice(state, optionIndex)
+			end
+			return
+		end
+
+		if
+			keyCode == Enum.KeyCode.Space
+			or keyCode == Enum.KeyCode.Return
+			or keyCode == Enum.KeyCode.KeypadEnter
+		then
+			activateContinue(state)
+		end
 	end)
 
 	return table.freeze(self) :: DefaultAdapter
@@ -317,13 +445,14 @@ end
 
 function DefaultAdapter.OnShow(self: DefaultAdapter, _info: { dialogueId: string })
 	local state = states[self]
+	clearDialogueSelection(state)
 	resetPresentation(state)
 	clearOptions(state)
 	clearSpeaker(state)
 	state.dialogueLabel.Text = ""
 	state.dialogueLabel.MaxVisibleGraphemes = -1
 	state.npcDialogueFrame.Visible = true
-	setContinueEnabled(state, false)
+	setContinueMode(state, "DISABLED", nil)
 	state.gui.Enabled = true
 end
 
@@ -337,25 +466,25 @@ function DefaultAdapter.OnPresentation(
 	clearOptions(state)
 	applySpeaker(state, presentation.speaker)
 	state.npcDialogueFrame.Visible = true
-	setContinueEnabled(state, false)
 
 	local runId = state.typewriter:Play(presentation.text, state.typewriterConfig)
 	state.currentRunId = runId
 	state.presentationCompleted = actions.presentationCompleted
+	setContinueMode(state, "TYPING", nil)
 end
 
 function DefaultAdapter.OnAdvanceReady(
 	self: DefaultAdapter,
-	_actions: ClientRuntimeClass.AdvanceActions
+	actions: ClientRuntimeClass.AdvanceActions
 )
-	setContinueEnabled(states[self], false)
+	setContinueMode(states[self], "ADVANCE", actions.advance)
 end
 
 function DefaultAdapter.OnFinishReady(
 	self: DefaultAdapter,
-	_actions: ClientRuntimeClass.FinishActions
+	actions: ClientRuntimeClass.FinishActions
 )
-	setContinueEnabled(states[self], false)
+	setContinueMode(states[self], "FINISH", actions.finish)
 end
 
 function DefaultAdapter.OnChoices(
@@ -366,8 +495,9 @@ function DefaultAdapter.OnChoices(
 	local state = states[self]
 	resetPresentation(state)
 	clearOptions(state)
-	setContinueEnabled(state, false)
+	setContinueMode(state, "DISABLED", nil)
 	state.choiceLocked = false
+	state.choose = actions.choose
 	local generation = state.choiceGeneration
 
 	for index, option in ipairs(options) do
@@ -378,16 +508,15 @@ function DefaultAdapter.OnChoices(
 		button.Active = true
 		button.AutoButtonColor = true
 		button.Selectable = true
+		button.SelectionOrder = index
 		setOptionText(button, option.text)
 		button.Parent = state.optionsFrame
 
 		local connection = button.Activated:Connect(function()
-			if state.choiceLocked or state.choiceGeneration ~= generation then
+			if state.choiceGeneration ~= generation then
 				return
 			end
-
-			lockChoiceButtons(state)
-			actions.choose(index)
+			activateChoice(state, index)
 		end)
 		table.insert(state.optionBindings, {
 			button = button,
@@ -396,6 +525,18 @@ function DefaultAdapter.OnChoices(
 	end
 
 	state.optionsFrame.Visible = true
+	local optionCount = #state.optionBindings
+	for index, binding in ipairs(state.optionBindings) do
+		local previousIndex = if index == 1 then optionCount else index - 1
+		local nextIndex = if index == optionCount then 1 else index + 1
+		binding.button.NextSelectionUp = state.optionBindings[previousIndex].button
+		binding.button.NextSelectionDown = state.optionBindings[nextIndex].button
+	end
+
+	local firstBinding = state.optionBindings[1]
+	if firstBinding then
+		GuiService.SelectedObject = firstBinding.button
+	end
 end
 
 function DefaultAdapter.OnEnd(
@@ -408,10 +549,11 @@ function DefaultAdapter.OnEnd(
 	local state = states[self]
 	resetPresentation(state)
 	clearOptions(state)
+	clearDialogueSelection(state)
 	clearSpeaker(state)
 	state.dialogueLabel.Text = ""
 	state.dialogueLabel.MaxVisibleGraphemes = -1
-	setContinueEnabled(state, false)
+	setContinueMode(state, "DISABLED", nil)
 	state.gui.Enabled = false
 end
 
