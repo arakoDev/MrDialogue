@@ -27,6 +27,13 @@ export type PresentationInfo = {
 	text: string,
 }
 
+export type EndOutcome = {
+	status: "completed" | "cancelled",
+	result: string?,
+	reason: string?,
+	authoritative: boolean,
+}
+
 export type Adapter = {
 	OnShow: (self: Adapter, info: { dialogueId: string }) -> (),
 	OnPresentation: (
@@ -41,13 +48,7 @@ export type Adapter = {
 		options: { Net.ChoiceOptionPayload },
 		actions: ChoiceActions
 	) -> (),
-	OnEnd: (
-		self: Adapter,
-		outcome: {
-			status: "completed",
-			result: string?,
-		}
-	) -> (),
+	OnEnd: (self: Adapter, outcome: EndOutcome) -> (),
 }
 
 export type ClientRuntime = {
@@ -68,10 +69,11 @@ type ClientRuntimeState = {
 	phase: ClientPhase,
 	sessionId: string?,
 	turn: string?,
+	cancelSent: boolean,
+	stopped: boolean,
 }
 
-local states: { [ClientRuntime]: ClientRuntimeState } =
-	setmetatable({}, { __mode = "k" }) :: any
+local states: { [ClientRuntime]: ClientRuntimeState } = setmetatable({}, { __mode = "k" }) :: any
 
 local ADAPTER_METHODS = {
 	"OnShow",
@@ -100,15 +102,10 @@ local function isCurrent(
 	phase: ClientPhase,
 	turn: string
 ): boolean
-	return state.sessionId == sessionId
-		and state.phase == phase
-		and state.turn == turn
+	return state.sessionId == sessionId and state.phase == phase and state.turn == turn
 end
 
-local function showPresentation(
-	state: ClientRuntimeState,
-	presentation: Net.PresentationPayload
-)
+local function showPresentation(state: ClientRuntimeState, presentation: Net.PresentationPayload)
 	local sessionId = state.sessionId
 	if not sessionId then
 		return
@@ -149,10 +146,7 @@ local function showPresentation(
 	state.adapter:OnPresentation(presentationInfo, actions)
 end
 
-local function showChoices(
-	state: ClientRuntimeState,
-	choices: Net.ChoicesPayload
-)
+local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayload)
 	local sessionId = state.sessionId
 	if not sessionId then
 		return
@@ -193,10 +187,7 @@ local function showChoices(
 	state.adapter:OnChoices(choices.options, actions)
 end
 
-local function showReady(
-	state: ClientRuntimeState,
-	message: Net.ReadyMessage
-)
+local function showReady(state: ClientRuntimeState, message: Net.ReadyMessage)
 	local sessionId = state.sessionId
 	if not sessionId or state.phase ~= "WAITING_SERVER" then
 		return
@@ -250,11 +241,8 @@ local function showReady(
 	end
 end
 
-local function handleStart(
-	state: ClientRuntimeState,
-	message: Net.StartMessage
-)
-	if state.sessionId ~= nil then
+local function handleStart(state: ClientRuntimeState, message: Net.StartMessage)
+	if state.stopped or state.sessionId ~= nil then
 		return
 	end
 
@@ -266,6 +254,7 @@ local function handleStart(
 	end
 
 	state.sessionId = message.sessionId
+	state.cancelSent = false
 
 	state.adapter:OnShow({
 		dialogueId = message.dialogueId,
@@ -278,16 +267,47 @@ local function handleStart(
 	end
 end
 
-local function handleMessage(
-	state: ClientRuntimeState,
-	message: Net.ServerMessage
-)
+local function handleEnd(state: ClientRuntimeState, message: Net.EndMessage)
+	local outcome: EndOutcome
+	if message.status == "cancelled" then
+		local reason = message.reason
+		if type(reason) ~= "string" or reason == "" then
+			return
+		end
+		outcome = {
+			status = "cancelled",
+			reason = reason,
+			authoritative = true,
+		}
+	else
+		outcome = {
+			status = "completed",
+			result = message.result,
+			authoritative = true,
+		}
+	end
+
+	state.phase = "IDLE"
+	state.sessionId = nil
+	state.turn = nil
+	state.cancelSent = false
+
+	state.adapter:OnEnd(outcome)
+end
+
+local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessage)
 	if message.type == "start" then
 		handleStart(state, message)
 		return
 	end
 
 	if state.sessionId == nil or message.sessionId ~= state.sessionId then
+		return
+	end
+	if state.cancelSent then
+		if message.type == "end" then
+			handleEnd(state, message)
+		end
 		return
 	end
 
@@ -314,19 +334,7 @@ local function handleMessage(
 	elseif message.type == "ready" then
 		showReady(state, message)
 	elseif message.type == "end" then
-		local outcome: {
-			status: "completed",
-			result: string?,
-		} = {
-			status = "completed",
-			result = message.result,
-		}
-
-		state.phase = "IDLE"
-		state.sessionId = nil
-		state.turn = nil
-
-		state.adapter:OnEnd(outcome)
+		handleEnd(state, message)
 	end
 end
 
@@ -341,12 +349,16 @@ function ClientRuntime.new(adapter: any): ClientRuntime
 		phase = "IDLE",
 		sessionId = nil,
 		turn = nil,
+		cancelSent = false,
+		stopped = false,
 	}
 
 	states[self] = state
 
 	state.connection = Net._connectClient(function(message: Net.ServerMessage)
-		handleMessage(state, message)
+		if not state.stopped then
+			handleMessage(state, message)
+		end
 	end)
 
 	return table.freeze(self) :: ClientRuntime
@@ -355,7 +367,87 @@ end
 function ClientRuntime.IsActive(self: ClientRuntime): boolean
 	local state = states[self]
 
-	return state ~= nil and state.sessionId ~= nil
+	return state ~= nil and not state.stopped and state.sessionId ~= nil
+end
+
+function ClientRuntime._cancelActiveSession(self: ClientRuntime): boolean
+	local state = states[self]
+	if not state or state.stopped or state.sessionId == nil or state.cancelSent then
+		return false
+	end
+
+	local sessionId = state.sessionId
+	local previousPhase: ClientPhase = state.phase
+	local previousTurn: string? = state.turn
+	state.phase = "WAITING_SERVER"
+	state.turn = nil
+	state.cancelSent = true
+
+	local sent, sendError = pcall(function()
+		Net._sendToServer({
+			type = "cancel",
+			sessionId = sessionId,
+		})
+	end)
+	if not sent then
+		if state.sessionId == sessionId and not state.stopped then
+			state.phase = previousPhase
+			state.turn = previousTurn
+			state.cancelSent = false
+		end
+		error(sendError, 2)
+	end
+
+	return true
+end
+
+function ClientRuntime._stop(self: ClientRuntime): boolean
+	local state = states[self]
+	if not state or state.stopped then
+		return false
+	end
+
+	local sessionId = state.sessionId
+	local shouldSendCancel = sessionId ~= nil and not state.cancelSent
+	local connection = state.connection
+	state.stopped = true
+	state.connection = nil
+	state.phase = "IDLE"
+	state.sessionId = nil
+	state.turn = nil
+	state.cancelSent = true
+
+	if shouldSendCancel and sessionId then
+		local sent, sendError = pcall(function()
+			Net._sendToServer({
+				type = "cancel",
+				sessionId = sessionId,
+			})
+		end)
+		if not sent then
+			warn(`[MrDialogue][CLIENT_CANCEL_SEND_FAILED] {tostring(sendError)}`)
+		end
+	end
+
+	if sessionId then
+		local outcome: EndOutcome = {
+			status = "cancelled",
+			reason = "client_shutdown",
+			authoritative = false,
+		}
+		local cleaned, cleanupError = pcall(function()
+			state.adapter:OnEnd(outcome)
+		end)
+		if not cleaned then
+			warn(`[MrDialogue][ADAPTER_END_FAILED] {tostring(cleanupError)}`)
+		end
+	end
+
+	if connection then
+		connection:Disconnect()
+	end
+
+	return true
 end
 
 return table.freeze(ClientRuntime)

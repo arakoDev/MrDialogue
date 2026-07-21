@@ -17,7 +17,9 @@ export type Config = {
 	punctuationPause: number?,
 }
 
-export type DefaultAdapter = ClientRuntimeClass.Adapter
+export type DefaultAdapter = ClientRuntimeClass.Adapter & {
+	Destroy: (self: DefaultAdapter) -> boolean,
+}
 
 type OptionBinding = {
 	button: GuiButton,
@@ -51,6 +53,7 @@ type DefaultAdapterState = GuiReferences & {
 	choiceGeneration: number,
 	choiceLocked: boolean,
 	choose: ((index: number) -> ())?,
+	destroyed: boolean,
 }
 
 local states: { [DefaultAdapter]: DefaultAdapterState } = setmetatable({}, { __mode = "k" }) :: any
@@ -384,6 +387,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		choiceGeneration = 0,
 		choiceLocked = true,
 		choose = nil,
+		destroyed = false,
 	}
 	states[self] = state
 
@@ -539,13 +543,7 @@ function DefaultAdapter.OnChoices(
 	end
 end
 
-function DefaultAdapter.OnEnd(
-	self: DefaultAdapter,
-	_outcome: {
-		status: "completed",
-		result: string?,
-	}
-)
+function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass.EndOutcome)
 	local state = states[self]
 	resetPresentation(state)
 	clearOptions(state)
@@ -555,6 +553,38 @@ function DefaultAdapter.OnEnd(
 	state.dialogueLabel.MaxVisibleGraphemes = -1
 	setContinueMode(state, "DISABLED", nil)
 	state.gui.Enabled = false
+end
+
+function DefaultAdapter.Destroy(self: DefaultAdapter): boolean
+	local state = states[self]
+	if not state or state.destroyed then
+		return false
+	end
+
+	state.destroyed = true
+	resetPresentation(state)
+	clearOptions(state)
+	clearDialogueSelection(state)
+	clearSpeaker(state)
+	state.dialogueLabel.Text = ""
+	state.dialogueLabel.MaxVisibleGraphemes = -1
+	state.gui.Enabled = false
+
+	if state.typewriterConnection then
+		state.typewriterConnection:Disconnect()
+		state.typewriterConnection = nil
+	end
+	if state.continueConnection then
+		state.continueConnection:Disconnect()
+		state.continueConnection = nil
+	end
+	if state.inputConnection then
+		state.inputConnection:Disconnect()
+		state.inputConnection = nil
+	end
+	state.typewriter:Destroy()
+
+	return true
 end
 
 return table.freeze(DefaultAdapter)

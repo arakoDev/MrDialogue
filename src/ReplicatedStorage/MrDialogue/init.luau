@@ -16,6 +16,7 @@ Net._initializeServer()
 
 export type Session = Types.Session
 export type SessionOptions = Types.SessionOptions
+export type SessionOutcome = Types.SessionOutcome
 export type DialogueContext = Types.DialogueContext
 export type ConditionHandler = Types.ConditionHandler
 export type ActionHandler = Types.ActionHandler

@@ -36,6 +36,7 @@ type SessionState = {
 	pendingEndResult: string?,
 	lifecycleGeneration: number,
 	clientStarted: boolean,
+	outcome: Types.SessionOutcome?,
 }
 
 type PreparedNode = {
@@ -240,20 +241,72 @@ local function sendReady(
 	state.pendingEndResult = pendingEndResult
 end
 
-local function endSession(self: Session, state: SessionState, result: string?)
+local function makeCompletedOutcome(result: string?): Types.SessionOutcome
+	return table.freeze({
+		status = "completed",
+		result = result,
+	}) :: any
+end
+
+local function makeCancelledOutcome(reason: string): Types.SessionOutcome
+	return table.freeze({
+		status = "cancelled",
+		reason = reason,
+	}) :: any
+end
+
+local function sendOutcome(
+	self: Session,
+	state: SessionState,
+	outcome: Types.SessionOutcome
+): (boolean, any)
 	local message: Net.EndMessage = {
 		type = "end",
 		sessionId = state.sessionId,
-		result = result,
+		status = outcome.status,
+		result = outcome.result,
+		reason = outcome.reason,
 	}
-	local sent, sendError = pcall(function()
+	return pcall(function()
 		Net._sendToClient(self.Player, message)
 	end)
+end
 
-	Session._end(self)
+local function endSession(self: Session, state: SessionState, result: string?)
+	local outcome = makeCompletedOutcome(result)
+	if not Session._end(self, outcome) or not state.clientStarted then
+		return
+	end
+
+	local sent, sendError = sendOutcome(self, state, outcome)
 	if not sent then
 		error(sendError, 0)
 	end
+end
+
+local function cancelSession(
+	self: Session,
+	state: SessionState,
+	reason: string,
+	notifyClient: boolean
+): boolean
+	local outcome = makeCancelledOutcome(reason)
+	if not Session._end(self, outcome) then
+		return false
+	end
+
+	if notifyClient and state.clientStarted then
+		local sent, sendError = sendOutcome(self, state, outcome)
+		if not sent then
+			warn(
+				`[MrDialogue][END_SEND_FAILED] Failed to cancel Session "{state.sessionId}": {tostring(
+					sendError
+				)}`
+			)
+		end
+	end
+
+	return true
 end
 
 local function beginResolving(state: SessionState)
@@ -272,28 +325,7 @@ local function failAction(
 )
 	local code = result.code or "ACTION_FAILED"
 	warn(`[MrDialogue][{code}] Action "{actionName}" failed: {tostring(result.details)}`)
-
-	local sent = true
-	local sendError: any = nil
-	if state.clientStarted then
-		local message: Net.EndMessage = {
-			type = "end",
-			sessionId = state.sessionId,
-			result = nil,
-		}
-		sent, sendError = pcall(function()
-			Net._sendToClient(self.Player, message)
-		end)
-	end
-
-	Session._end(self)
-	if not sent then
-		warn(
-			`[MrDialogue][END_SEND_FAILED] Failed to end action Session for "{actionName}": {tostring(
-				sendError
-			)}`
-		)
-	end
+	cancelSession(self, state, "action_error", true)
 
 	error(`action "{actionName}" failed with {code}`, 3)
 end
@@ -474,6 +506,7 @@ function Session.new(
 		pendingEndResult = nil,
 		lifecycleGeneration = 0,
 		clientStarted = false,
+		outcome = nil,
 	}
 	states[self] = state
 	activeSessions[player] = self
@@ -493,7 +526,7 @@ function Session.new(
 	end
 	if initial.node.type == "end" then
 		state.currentNodeId = initial.nodeId
-		Session._end(self)
+		Session._end(self, makeCompletedOutcome(initial.node.result))
 		return table.freeze(self) :: Session, nil
 	end
 
@@ -526,6 +559,28 @@ end
 function Session.IsActive(self: Session): boolean
 	local state = states[self]
 	return state ~= nil and state.active
+end
+
+function Session.GetOutcome(self: Session): Types.SessionOutcome?
+	local state = states[self]
+	return if state then state.outcome else nil
+end
+
+function Session.Cancel(self: Session, reason: any): boolean
+	local cancelReason = if reason == nil then "manual" else reason
+	if
+		type(cancelReason) ~= "string"
+		or (cancelReason ~= "manual" and string.match(cancelReason, "^[%w_%-]+:[%w_.%-]+$") == nil)
+	then
+		error('Session:Cancel reason must be "manual" or a namespaced string', 2)
+	end
+
+	local state = states[self]
+	if not state or not state.active then
+		return false
+	end
+
+	return cancelSession(self, state, cancelReason, self.Player.Parent == Players)
 end
 
 local function handlePresentationCompleted(self: Session, state: SessionState, message: any)
@@ -650,7 +705,9 @@ local function handleClientMessage(player: Player, message: any)
 		return
 	end
 
-	if message.type == "presentation_completed" then
+	if message.type == "cancel" then
+		cancelSession(self, state, "client_cancelled", true)
+	elseif message.type == "presentation_completed" then
 		handlePresentationCompleted(self, state, message)
 	elseif message.type == "advance" then
 		handleAdvance(self, state, message)
@@ -691,7 +748,7 @@ function Session._getSessionId(self: Session): string
 	return states[self].sessionId
 end
 
-function Session._end(self: Session): boolean
+function Session._end(self: Session, outcome: Types.SessionOutcome): boolean
 	local state = states[self]
 	if not state or not state.active then
 		return false
@@ -704,6 +761,7 @@ function Session._end(self: Session): boolean
 	state.offeredOptions = nil
 	state.pendingNodeId = nil
 	state.pendingEndResult = nil
+	state.outcome = outcome
 
 	if activeSessions[self.Player] == self then
 		activeSessions[self.Player] = nil
@@ -713,6 +771,13 @@ end
 
 if RunService:IsServer() then
 	Net._connectServer(handleClientMessage)
+	Players.PlayerRemoving:Connect(function(player)
+		local self = activeSessions[player]
+		local state = if self then states[self] else nil
+		if self and state and state.active then
+			cancelSession(self, state, "player_left", false)
+		end
+	end)
 end
 
 return table.freeze(Session)

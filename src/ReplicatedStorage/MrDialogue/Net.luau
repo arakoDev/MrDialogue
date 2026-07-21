@@ -63,7 +63,9 @@ export type ReadyMessage = {
 export type EndMessage = {
 	type: "end",
 	sessionId: string,
+	status: "completed" | "cancelled",
 	result: string?,
+	reason: string?,
 }
 
 export type ServerMessage =
@@ -92,7 +94,16 @@ export type AdvanceMessage = {
 	turn: string,
 }
 
-export type ClientMessage = PresentationCompletedMessage | ChooseMessage | AdvanceMessage
+export type CancelMessage = {
+	type: "cancel",
+	sessionId: string,
+}
+
+export type ClientMessage =
+	PresentationCompletedMessage
+	| ChooseMessage
+	| AdvanceMessage
+	| CancelMessage
 
 local cachedRemote: RemoteEvent? = nil
 

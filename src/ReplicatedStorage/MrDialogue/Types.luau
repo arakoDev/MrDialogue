@@ -1,9 +1,17 @@
 --!strict
 
+export type SessionOutcome = {
+	status: "completed" | "cancelled",
+	result: string?,
+	reason: string?,
+}
+
 export type Session = {
 	Player: Player,
 	DialogueId: string,
 	IsActive: (self: Session) -> boolean,
+	GetOutcome: (self: Session) -> SessionOutcome?,
+	Cancel: (self: Session, reason: string?) -> boolean,
 }
 
 export type SessionOptions = {

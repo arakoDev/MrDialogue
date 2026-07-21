@@ -12,6 +12,7 @@ local TypewriterClass = require(script.Parent.Typewriter)
 
 export type Adapter = ClientRuntimeClass.Adapter
 export type ClientRuntime = ClientRuntimeClass.ClientRuntime
+export type EndOutcome = ClientRuntimeClass.EndOutcome
 export type DefaultAdapter = DefaultAdapterClass.DefaultAdapter
 export type DefaultAdapterConfig = DefaultAdapterClass.Config
 export type Typewriter = TypewriterClass.Typewriter
@@ -24,6 +25,7 @@ export type StartConfig = {
 
 local Client = {}
 local runtime: ClientRuntime? = nil
+local ownedDefaultAdapter: DefaultAdapter? = nil
 
 Client.DefaultAdapter = DefaultAdapterClass
 Client.Typewriter = TypewriterClass
@@ -38,15 +40,44 @@ function Client.Start(config: StartConfig?): ClientRuntime
 	end
 
 	local adapter: Adapter
+	local defaultAdapter: DefaultAdapter? = nil
 	if config and config.adapter ~= nil then
 		adapter = config.adapter
 	else
-		adapter = DefaultAdapterClass.new()
+		local createdAdapter = DefaultAdapterClass.new()
+		defaultAdapter = createdAdapter
+		adapter = createdAdapter
 	end
 
 	local newRuntime = ClientRuntimeClass.new(adapter)
 	runtime = newRuntime
+	ownedDefaultAdapter = defaultAdapter
 	return newRuntime
+end
+
+function Client.CancelActiveSession(): boolean
+	if not runtime then
+		return false
+	end
+
+	return ClientRuntimeClass._cancelActiveSession(runtime)
+end
+
+function Client.Stop(): boolean
+	if not runtime then
+		return false
+	end
+
+	local currentRuntime = runtime
+	local currentDefaultAdapter = ownedDefaultAdapter
+	runtime = nil
+	ownedDefaultAdapter = nil
+
+	local stopped = ClientRuntimeClass._stop(currentRuntime)
+	if currentDefaultAdapter then
+		currentDefaultAdapter:Destroy()
+	end
+	return stopped
 end
 
 return table.freeze(Client)
