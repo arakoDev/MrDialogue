@@ -1,6 +1,7 @@
 --!strict
 
 local Types = require(script.Parent.Types)
+local Conditions = require(script.Parent.Conditions)
 local SessionClass = require(script.Parent.Session)
 
 local Dialogue = {}
@@ -51,6 +52,36 @@ local function deepCopy(value: any, copies: { [any]: any }): any
 	end
 
 	return table.freeze(copy)
+end
+
+local function validateConditionSpec(spec: any, path: string)
+	if type(spec) ~= "table" then
+		error(`MrDialogue.new: {path} must be a condition table`, 4)
+	end
+	if type(spec.name) ~= "string" or spec.name == "" then
+		error(`MrDialogue.new: {path}.name must be a non-empty string`, 4)
+	end
+
+	local arguments = spec.arguments
+	if arguments == nil then
+		return
+	end
+	if type(arguments) ~= "table" then
+		error(`MrDialogue.new: {path}.arguments must be an array`, 4)
+	end
+
+	local argumentCount = 0
+	for index in pairs(arguments) do
+		if type(index) ~= "number" or index % 1 ~= 0 or index < 1 then
+			error(`MrDialogue.new: {path}.arguments must be a dense array`, 4)
+		end
+		argumentCount += 1
+	end
+	for index = 1, argumentCount do
+		if arguments[index] == nil then
+			error(`MrDialogue.new: {path}.arguments must be a dense array`, 4)
+		end
+	end
 end
 
 local function validatePresentation(nodeKind: string, nodeId: string, node: any, definition: any)
@@ -140,9 +171,14 @@ local function validateLine(nodeId: string, node: any, definition: any)
 		if type(target) ~= "table" then
 			error(`MrDialogue.new: line node "{nodeId}" target "{node.next}" does not exist`, 4)
 		end
-		if target.type ~= "line" and target.type ~= "choice" and target.type ~= "end" then
+		if
+			target.type ~= "line"
+			and target.type ~= "choice"
+			and target.type ~= "branch"
+			and target.type ~= "end"
+		then
 			error(
-				`MrDialogue.new: line node "{nodeId}" target must be a line, choice, or end until node traversal is implemented`,
+				`MrDialogue.new: line node "{nodeId}" target must be a line, choice, branch, or end until actions are implemented`,
 				4
 			)
 		end
@@ -199,9 +235,9 @@ local function validateChoice(nodeId: string, node: any, definition: any)
 		end
 
 		if option.condition ~= nil then
-			error(
-				`MrDialogue.new: choice node "{nodeId}" option {index} conditions are not implemented yet`,
-				4
+			validateConditionSpec(
+				option.condition,
+				`choice node "{nodeId}" option {index} condition`
 			)
 		end
 
@@ -212,9 +248,69 @@ local function validateChoice(nodeId: string, node: any, definition: any)
 				4
 			)
 		end
-		if target.type ~= "line" and target.type ~= "choice" and target.type ~= "end" then
+		if
+			target.type ~= "line"
+			and target.type ~= "choice"
+			and target.type ~= "branch"
+			and target.type ~= "end"
+		then
 			error(
-				`MrDialogue.new: choice node "{nodeId}" option {index} target must be a line, choice, or end until node traversal is implemented`,
+				`MrDialogue.new: choice node "{nodeId}" option {index} target must be a line, choice, branch, or end until actions are implemented`,
+				4
+			)
+		end
+	end
+
+	if node.fallback ~= nil then
+		if type(node.fallback) ~= "string" or node.fallback == "" then
+			error(`MrDialogue.new: choice node "{nodeId}" fallback must be a non-empty string`, 4)
+		end
+
+		local fallback = definition.nodes[node.fallback]
+		if type(fallback) ~= "table" then
+			error(
+				`MrDialogue.new: choice node "{nodeId}" fallback target "{node.fallback}" does not exist`,
+				4
+			)
+		end
+		if
+			fallback.type ~= "line"
+			and fallback.type ~= "choice"
+			and fallback.type ~= "branch"
+			and fallback.type ~= "end"
+		then
+			error(
+				`MrDialogue.new: choice node "{nodeId}" fallback must target a line, choice, branch, or end until actions are implemented`,
+				4
+			)
+		end
+	end
+end
+
+local function validateBranch(nodeId: string, node: any, definition: any)
+	validateConditionSpec(node.condition, `branch node "{nodeId}" condition`)
+
+	for _, field in ipairs({ "onTrue", "onFalse" }) do
+		local targetId = node[field]
+		if type(targetId) ~= "string" or targetId == "" then
+			error(`MrDialogue.new: branch node "{nodeId}" {field} must be a non-empty string`, 4)
+		end
+
+		local target = definition.nodes[targetId]
+		if type(target) ~= "table" then
+			error(
+				`MrDialogue.new: branch node "{nodeId}" {field} target "{targetId}" does not exist`,
+				4
+			)
+		end
+		if
+			target.type ~= "line"
+			and target.type ~= "choice"
+			and target.type ~= "branch"
+			and target.type ~= "end"
+		then
+			error(
+				`MrDialogue.new: branch node "{nodeId}" {field} must target a line, choice, branch, or end until actions are implemented`,
 				4
 			)
 		end
@@ -260,6 +356,8 @@ function Dialogue.new(definition: any): Dialogue
 			validateLine(nodeId, node, definition)
 		elseif node.type == "choice" then
 			validateChoice(nodeId, node, definition)
+		elseif node.type == "branch" then
+			validateBranch(nodeId, node, definition)
 		elseif node.type == "end" then
 			validateEnd(nodeId, node)
 		end
@@ -283,6 +381,21 @@ function Dialogue.Start(
 	player: Player,
 	options: Types.SessionOptions?
 ): (SessionClass.Session?, string?)
+	for nodeId, node in pairs(self._definition.nodes) do
+		if node.type == "branch" and not Conditions._isRegistered(node.condition.name) then
+			return nil,
+				`condition "{node.condition.name}" used by branch node "{nodeId}" is not registered`
+		elseif node.type == "choice" then
+			for index, option in ipairs(node.options) do
+				local condition = option.condition
+				if condition and not Conditions._isRegistered(condition.name) then
+					return nil,
+						`condition "{condition.name}" used by choice node "{nodeId}" option {index} is not registered`
+				end
+			end
+		end
+	end
+
 	return SessionClass.new(player, self.Id, self._definition, options)
 end
 

@@ -8,6 +8,7 @@ end
 
 local Net = require(script.Net)
 local Types = require(script.Types)
+local Conditions = require(script.Conditions)
 local DialogueClass = require(script.Dialogue)
 
 Net._initializeServer()
@@ -31,6 +32,10 @@ export type DialogueDefinition = Types.DialogueDefinition
 export type Dialogue = DialogueClass.Dialogue
 
 local MrDialogue = {}
+
+function MrDialogue.RegisterCondition(name: string, handler: Types.ConditionHandler)
+	Conditions.Register(name, handler)
+end
 
 function MrDialogue.new(definition: Types.DialogueDefinition): DialogueClass.Dialogue
 	return DialogueClass.new(definition)

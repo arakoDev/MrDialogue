@@ -60,6 +60,7 @@ export type ChoiceNode = PresentationFields & {
 	type: "choice",
 	text: string?,
 	options: { ChoiceOption },
+	fallback: string?,
 }
 
 export type BranchNode = {
