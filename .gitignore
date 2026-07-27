@@ -40,3 +40,4 @@ sourcemap.json
 
 docs/
 .agents/
+.claude/

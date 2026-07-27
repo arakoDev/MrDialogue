@@ -1,7 +1,6 @@
 --!strict
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 local RUNTIME_NAME = "MrDialogueRuntime"
 local REMOTE_NAME = "DialogueRemote"
@@ -106,97 +105,57 @@ export type ClientMessage =
 	| AdvanceMessage
 	| CancelMessage
 
-local cachedRemote: RemoteEvent? = nil
+local remote: RemoteEvent? = nil
 
-local function getExistingRuntime(): Folder?
+local function getRuntimeFolder(): Instance
 	local existing = ReplicatedStorage:FindFirstChild(RUNTIME_NAME)
-	if not existing then
-		return nil
-	end
-
-	if not existing:IsA("Folder") then
-		error(`ReplicatedStorage.{RUNTIME_NAME} must be a Folder`, 3)
-	end
-
-	return existing
-end
-
-local function getExistingRemote(runtime: Folder): RemoteEvent?
-	local remote = cachedRemote
-	if remote and remote.Parent == runtime and remote.Name == REMOTE_NAME then
-		return remote
-	end
-
-	local existing = runtime:FindFirstChild(REMOTE_NAME)
-	if not existing then
-		return nil
-	end
-
-	if not existing:IsA("RemoteEvent") then
-		error(`ReplicatedStorage.{RUNTIME_NAME}.{REMOTE_NAME} must be a RemoteEvent`, 3)
-	end
-
-	cachedRemote = existing
-	return existing
-end
-
-function Net._initializeServer(): RemoteEvent
-	if not RunService:IsServer() then
-		error("MrDialogue networking can only be initialized on the server", 2)
-	end
-
-	local existingRuntime = getExistingRuntime()
-	local runtime: Folder
-	if existingRuntime then
-		runtime = existingRuntime
-	else
-		runtime = Instance.new("Folder")
-		runtime.Name = RUNTIME_NAME
-		runtime.Parent = ReplicatedStorage
-	end
-
-	local existing = getExistingRemote(runtime)
 	if existing then
 		return existing
 	end
 
-	local remote = Instance.new("RemoteEvent")
-	remote.Name = REMOTE_NAME
-	remote.Parent = runtime
-	cachedRemote = remote
+	local folder = Instance.new("Folder")
+	folder.Name = RUNTIME_NAME
+	folder.Parent = ReplicatedStorage
 
-	return remote
+	return folder
+end
+
+--[[
+	Creates the shared remote, or adopts one another copy of the package already made — duplicated
+	Wally dependencies must end up on the same wire. Consumers never set this up themselves.
+]]
+function Net._initializeServer(): RemoteEvent
+	local cached = remote
+	if cached then
+		return cached
+	end
+
+	local runtime = getRuntimeFolder()
+	local existing = runtime:FindFirstChild(REMOTE_NAME)
+	if existing and existing:IsA("RemoteEvent") then
+		remote = existing
+		return existing
+	end
+
+	local created = Instance.new("RemoteEvent")
+	created.Name = REMOTE_NAME
+	created.Parent = runtime
+	remote = created
+
+	return created
 end
 
 function Net._getClientRemote(): RemoteEvent
-	if not RunService:IsClient() then
-		error("MrDialogue client networking can only be used on the client", 2)
+	local cached = remote
+	if cached then
+		return cached
 	end
 
-	local existingRuntime = getExistingRuntime()
-	local runtime: Folder
-	if existingRuntime then
-		runtime = existingRuntime
-	else
-		local instance = ReplicatedStorage:WaitForChild(RUNTIME_NAME)
-		if not instance:IsA("Folder") then
-			error(`ReplicatedStorage.{RUNTIME_NAME} must be a Folder`, 2)
-		end
-		runtime = instance
-	end
+	local runtime = ReplicatedStorage:WaitForChild(RUNTIME_NAME)
+	local found = runtime:WaitForChild(REMOTE_NAME) :: RemoteEvent
+	remote = found
 
-	local existing = getExistingRemote(runtime)
-	if existing then
-		return existing
-	end
-
-	local remote = runtime:WaitForChild(REMOTE_NAME)
-	if not remote:IsA("RemoteEvent") then
-		error(`ReplicatedStorage.{RUNTIME_NAME}.{REMOTE_NAME} must be a RemoteEvent`, 2)
-	end
-
-	cachedRemote = remote
-	return remote
+	return found
 end
 
 function Net._sendToClient(player: Player, message: ServerMessage)

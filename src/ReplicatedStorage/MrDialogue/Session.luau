@@ -2,7 +2,6 @@
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
-local RunService = game:GetService("RunService")
 
 local Actions = require(script.Parent.Actions)
 local Conditions = require(script.Parent.Conditions)
@@ -34,11 +33,15 @@ type SessionState = {
 	offeredOptions: { Types.ChoiceOption }?,
 	pendingNodeId: string?,
 	pendingEndResult: string?,
-	lifecycleGeneration: number,
 	clientStarted: boolean,
 	outcome: Types.SessionOutcome?,
+	characterAddedConnection: RBXScriptConnection?,
+	characterChildAddedConnection: RBXScriptConnection?,
+	humanoidDiedConnection: RBXScriptConnection?,
 }
 
+-- A node that has been turned into a client payload but not sent yet: resolution runs ahead of
+-- presentation, so the server often knows what comes next before the player asks for it.
 type PreparedNode = {
 	phase: "WAITING_PRESENTATION" | "WAITING_CHOICE",
 	expectedTurn: string,
@@ -53,7 +56,7 @@ type ResolvedNode = {
 	prepared: PreparedNode?,
 }
 
-local MAX_SILENT_HOPS = 32
+-- Stands in for the end of an action node that has no `next`.
 local IMPLICIT_END_NODE: Types.EndNode = {
 	type = "end",
 }
@@ -66,41 +69,24 @@ local function resolveSpeaker(
 	node: Types.LineNode | Types.ChoiceNode
 ): Net.SpeakerPayload?
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
-	if speakerId == nil or speakerId == false then
-		return nil
-	end
 	if type(speakerId) ~= "string" then
-		error("presentation speaker must be a string or false", 3)
+		-- No speaker at all, or an explicit `false` suppressing the dialogue default: narration.
+		return nil
 	end
 
 	local speakers = definition.speakers
 	local speaker = if speakers then speakers[speakerId] else nil
 	if not speaker then
-		error(`presentation references unknown speaker "{speakerId}"`, 3)
+		return nil
 	end
 
-	local icon: string? = nil
-	if node.emotion ~= nil then
-		local emotions = speaker.emotions
-		icon = if emotions then emotions[node.emotion] else nil
-		if type(icon) ~= "string" then
-			error(
-				`presentation references unknown emotion "{node.emotion}" for speaker "{speakerId}"`,
-				3
-			)
-		end
-	else
-		icon = speaker.icon
-	end
-
-	local resolvedIcon = icon or speaker.icon or definition.defaultIcon
-	if resolvedIcon == "" then
-		resolvedIcon = nil
-	end
+	local emotions = speaker.emotions
+	local emotionIcon = if node.emotion and emotions then emotions[node.emotion] else nil
+	local icon = emotionIcon or speaker.icon or definition.defaultIcon
 
 	return {
 		name = speaker.name,
-		icon = resolvedIcon,
+		icon = if icon ~= "" then icon else nil,
 	}
 end
 
@@ -114,34 +100,22 @@ local function makeContext(self: Session, state: SessionState): Types.DialogueCo
 	}
 end
 
-local function prepareChoiceOffer(
-	self: Session,
-	state: SessionState,
-	node: Types.ChoiceNode
+local function preparePresentation(
+	definition: Types.DialogueDefinition,
+	node: Types.LineNode | Types.ChoiceNode,
+	kind: "line" | "choice_prompt",
+	text: string
 ): PreparedNode
 	local turn = HttpService:GenerateGUID(false)
-	local options: { Net.ChoiceOptionPayload } = {}
-	local offeredOptions: { Types.ChoiceOption } = {}
-	local context = makeContext(self, state)
-
-	for _, option in ipairs(node.options) do
-		if option.condition == nil or Conditions._evaluate(option.condition, context) then
-			table.insert(options, {
-				text = option.text,
-			})
-			table.insert(offeredOptions, option)
-		end
-	end
-
 	return {
-		phase = "WAITING_CHOICE",
+		phase = "WAITING_PRESENTATION",
 		expectedTurn = turn,
-		presentation = nil,
-		choices = {
+		presentation = {
 			turn = turn,
-			options = options,
+			kind = kind,
+			speaker = resolveSpeaker(definition, node),
+			text = text,
 		},
-		offeredOptions = offeredOptions,
 	}
 end
 
@@ -151,36 +125,47 @@ local function prepareVisibleNode(
 ): PreparedNode
 	local node = definition.nodes[nodeId]
 	if node.type == "line" then
-		local turn = HttpService:GenerateGUID(false)
-		return {
-			phase = "WAITING_PRESENTATION",
-			expectedTurn = turn,
-			presentation = {
-				turn = turn,
-				kind = "line",
-				speaker = resolveSpeaker(definition, node),
-				text = node.text,
-			},
-			choices = nil,
-			offeredOptions = nil,
-		}
+		return preparePresentation(definition, node, "line", node.text)
 	elseif node.type == "choice" and node.text ~= nil then
-		local turn = HttpService:GenerateGUID(false)
-		return {
-			phase = "WAITING_PRESENTATION",
-			expectedTurn = turn,
-			presentation = {
-				turn = turn,
-				kind = "choice_prompt",
-				speaker = resolveSpeaker(definition, node),
-				text = node.text,
-			},
-			choices = nil,
-			offeredOptions = nil,
-		}
+		return preparePresentation(definition, node, "choice_prompt", node.text)
 	end
 
-	error(`node "{nodeId}" is not a visible dialogue presentation`, 3)
+	error(`node "{nodeId}" has nothing to present`, 2)
+end
+
+-- Options are filtered the moment they are about to be shown, never earlier: a condition that was
+-- true when the conversation started may not be true by the time the player gets here. Returns nil
+-- when nothing survived the filter.
+local function prepareChoiceOffer(
+	self: Session,
+	state: SessionState,
+	node: Types.ChoiceNode
+): PreparedNode?
+	local options: { Net.ChoiceOptionPayload } = {}
+	local offeredOptions: { Types.ChoiceOption } = {}
+	local context = makeContext(self, state)
+
+	for _, option in ipairs(node.options) do
+		if option.condition == nil or Conditions._evaluate(option.condition, context) then
+			table.insert(options, { text = option.text })
+			table.insert(offeredOptions, option)
+		end
+	end
+
+	if #offeredOptions == 0 then
+		return nil
+	end
+
+	local turn = HttpService:GenerateGUID(false)
+	return {
+		phase = "WAITING_CHOICE",
+		expectedTurn = turn,
+		choices = {
+			turn = turn,
+			options = options,
+		},
+		offeredOptions = offeredOptions,
+	}
 end
 
 local function applyPreparedNode(state: SessionState, prepared: PreparedNode)
@@ -193,35 +178,33 @@ end
 
 local function sendPreparedNode(self: Session, state: SessionState, prepared: PreparedNode)
 	local presentation = prepared.presentation
+	local choices = prepared.choices
+
 	if presentation then
-		local message: Net.PresentMessage = {
+		Net._sendToClient(self.Player, {
 			type = "present",
 			sessionId = state.sessionId,
 			turn = presentation.turn,
 			kind = presentation.kind,
 			speaker = presentation.speaker,
 			text = presentation.text,
-		}
-		Net._sendToClient(self.Player, message)
-		applyPreparedNode(state, prepared)
-		return
+		})
+	elseif choices then
+		Net._sendToClient(self.Player, {
+			type = "choices",
+			sessionId = state.sessionId,
+			turn = choices.turn,
+			options = choices.options,
+		})
 	end
 
-	local choices = prepared.choices
-	if not choices then
-		error("prepared dialogue node has no client payload", 2)
-	end
-
-	local message: Net.ChoicesMessage = {
-		type = "choices",
-		sessionId = state.sessionId,
-		turn = choices.turn,
-		options = choices.options,
-	}
-	Net._sendToClient(self.Player, message)
 	applyPreparedNode(state, prepared)
 end
 
+--[[
+	Announces that the next step is waiting on a click. The pending node is held back rather than
+	sent so that the player always acknowledges the line they just read.
+]]
 local function sendReady(
 	self: Session,
 	state: SessionState,
@@ -231,87 +214,18 @@ local function sendReady(
 	pendingEndResult: string?
 )
 	local turn = HttpService:GenerateGUID(false)
-	local message: Net.ReadyMessage = {
+	Net._sendToClient(self.Player, {
 		type = "ready",
 		sessionId = state.sessionId,
 		turn = turn,
 		interaction = interaction,
-	}
+	})
 
-	Net._sendToClient(self.Player, message)
 	state.phase = phase
 	state.expectedTurn = turn
 	state.offeredOptions = nil
 	state.pendingNodeId = pendingNodeId
 	state.pendingEndResult = pendingEndResult
-end
-
-local function makeCompletedOutcome(result: string?): Types.SessionOutcome
-	return table.freeze({
-		status = "completed",
-		result = result,
-	}) :: any
-end
-
-local function makeCancelledOutcome(reason: string): Types.SessionOutcome
-	return table.freeze({
-		status = "cancelled",
-		reason = reason,
-	}) :: any
-end
-
-local function sendOutcome(
-	self: Session,
-	state: SessionState,
-	outcome: Types.SessionOutcome
-): (boolean, any)
-	local message: Net.EndMessage = {
-		type = "end",
-		sessionId = state.sessionId,
-		status = outcome.status,
-		result = outcome.result,
-		reason = outcome.reason,
-	}
-	return pcall(function()
-		Net._sendToClient(self.Player, message)
-	end)
-end
-
-local function endSession(self: Session, state: SessionState, result: string?)
-	local outcome = makeCompletedOutcome(result)
-	if not Session._end(self, outcome) or not state.clientStarted then
-		return
-	end
-
-	local sent, sendError = sendOutcome(self, state, outcome)
-	if not sent then
-		error(sendError, 0)
-	end
-end
-
-local function cancelSession(
-	self: Session,
-	state: SessionState,
-	reason: string,
-	notifyClient: boolean
-): boolean
-	local outcome = makeCancelledOutcome(reason)
-	if not Session._end(self, outcome) then
-		return false
-	end
-
-	if notifyClient and state.clientStarted then
-		local sent, sendError = sendOutcome(self, state, outcome)
-		if not sent then
-			warn(
-				`[MrDialogue][END_SEND_FAILED] Failed to cancel Session "{state.sessionId}": {tostring(
-					sendError
-				)}`
-			)
-		end
-	end
-
-	return true
 end
 
 local function beginResolving(state: SessionState)
@@ -322,19 +236,147 @@ local function beginResolving(state: SessionState)
 	state.pendingEndResult = nil
 end
 
-local function failAction(
-	self: Session,
-	state: SessionState,
-	actionName: string,
-	result: Actions.ExecutionResult
-)
-	local code = result.code or "ACTION_FAILED"
-	warn(`[MrDialogue][{code}] Action "{actionName}" failed: {tostring(result.details)}`)
-	cancelSession(self, state, "action_error", true)
+local function sendOutcome(self: Session, state: SessionState, outcome: Types.SessionOutcome)
+	if not state.clientStarted or self.Player.Parent ~= Players then
+		return
+	end
 
-	error(`action "{actionName}" failed with {code}`, 3)
+	Net._sendToClient(self.Player, {
+		type = "end",
+		sessionId = state.sessionId,
+		status = outcome.status,
+		result = outcome.result,
+		reason = outcome.reason,
+	})
 end
 
+local function endSession(self: Session, state: SessionState, result: string?)
+	local outcome: Types.SessionOutcome = table.freeze({
+		status = "completed",
+		result = result,
+	}) :: any
+
+	if Session._end(self, outcome) then
+		sendOutcome(self, state, outcome)
+	end
+end
+
+local function cancelSession(
+	self: Session,
+	state: SessionState,
+	reason: string,
+	notifyClient: boolean
+): boolean
+	local outcome: Types.SessionOutcome = table.freeze({
+		status = "cancelled",
+		reason = reason,
+	}) :: any
+
+	if not Session._end(self, outcome) then
+		return false
+	end
+	if notifyClient then
+		sendOutcome(self, state, outcome)
+	end
+
+	return true
+end
+
+local function disconnectCharacterDeathMonitoring(state: SessionState)
+	local characterChildAddedConnection = state.characterChildAddedConnection
+	if characterChildAddedConnection then
+		characterChildAddedConnection:Disconnect()
+		state.characterChildAddedConnection = nil
+	end
+
+	local humanoidDiedConnection = state.humanoidDiedConnection
+	if humanoidDiedConnection then
+		humanoidDiedConnection:Disconnect()
+		state.humanoidDiedConnection = nil
+	end
+end
+
+local function disconnectDeathMonitoring(state: SessionState)
+	disconnectCharacterDeathMonitoring(state)
+
+	local characterAddedConnection = state.characterAddedConnection
+	if characterAddedConnection then
+		characterAddedConnection:Disconnect()
+		state.characterAddedConnection = nil
+	end
+end
+
+local function monitorCharacterDeath(self: Session, state: SessionState, character: Model)
+	disconnectCharacterDeathMonitoring(state)
+
+	local function monitorHumanoid(humanoid: Humanoid)
+		local existingConnection = state.humanoidDiedConnection
+		if existingConnection then
+			existingConnection:Disconnect()
+		end
+
+		state.humanoidDiedConnection = humanoid.Died:Connect(function()
+			if state.active and self.Player.Character == character then
+				cancelSession(self, state, "death", true)
+			end
+		end)
+
+		-- Died may already have fired before a Session starts or while a new character is assembling.
+		if humanoid.Health <= 0 and state.active and self.Player.Character == character then
+			cancelSession(self, state, "death", true)
+		end
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		monitorHumanoid(humanoid)
+		return
+	end
+
+	state.characterChildAddedConnection = character.ChildAdded:Connect(function(child)
+		if state.active and self.Player.Character == character and child:IsA("Humanoid") then
+			local childAddedConnection = state.characterChildAddedConnection
+			if childAddedConnection then
+				childAddedConnection:Disconnect()
+				state.characterChildAddedConnection = nil
+			end
+			monitorHumanoid(child)
+		end
+	end)
+end
+
+local function beginDeathMonitoring(self: Session, state: SessionState)
+	if state.definition.endDialogueOnDeath == false then
+		return
+	end
+
+	state.characterAddedConnection = self.Player.CharacterAdded:Connect(function(character)
+		if state.active then
+			monitorCharacterDeath(self, state, character)
+		end
+	end)
+
+	local character = self.Player.Character
+	if character then
+		monitorCharacterDeath(self, state, character)
+	end
+end
+
+local function cancelWithoutOptions(self: Session, state: SessionState, nodeId: string)
+	warn(
+		`[MrDialogue][CHOICE_NO_AVAILABLE_OPTIONS] Choice node "{nodeId}" in dialogue "{self.DialogueId}" filtered to zero options and has no fallback`
+	)
+	cancelSession(self, state, "no_available_options", true)
+end
+
+--[[
+	Walks branches and actions until something the player can actually see turns up. Returns nil when
+	the walk ended the Session instead — a failed action, a dead-end choice, a graph that loops
+	without presenting anything, or a handler that cancelled mid-flight. Every caller just stops.
+
+	`executeActions` is false while looking ahead past a line the player has not acknowledged yet:
+	gameplay must not happen until they click.
+]]
 local function resolveNode(
 	self: Session,
 	state: SessionState,
@@ -343,123 +385,117 @@ local function resolveNode(
 ): ResolvedNode?
 	local nodeId = initialNodeId
 	local visited: { [string]: boolean } = {}
-	local silentHops = 0
 
 	while true do
 		if visited[nodeId] then
-			error(`dialogue resolution entered a silent cycle at node "{nodeId}"`, 2)
+			warn(
+				`[MrDialogue][RESOLUTION_CYCLE] Dialogue "{self.DialogueId}" looped back to node "{nodeId}" without presenting anything`
+			)
+			cancelSession(self, state, "resolution_error", true)
+			return nil
 		end
 		visited[nodeId] = true
 
 		local node = state.definition.nodes[nodeId]
 		if node.type == "branch" then
-			if silentHops >= MAX_SILENT_HOPS then
-				error(`dialogue resolution exceeded {MAX_SILENT_HOPS} silent nodes`, 2)
-			end
-			silentHops += 1
-
 			local passed = Conditions._evaluate(node.condition, makeContext(self, state))
 			nodeId = if passed then node.onTrue else node.onFalse
 		elseif node.type == "choice" and node.text == nil then
 			local prepared = prepareChoiceOffer(self, state, node)
-			local offeredOptions = prepared.offeredOptions
-			if offeredOptions and #offeredOptions > 0 then
-				return {
-					nodeId = nodeId,
-					node = node,
-					prepared = prepared,
-				}
+			if prepared then
+				return { nodeId = nodeId, node = node, prepared = prepared }
 			end
-
 			if node.fallback == nil then
-				error(`choice node "{nodeId}" has no available options or fallback`, 2)
+				cancelWithoutOptions(self, state, nodeId)
+				return nil
 			end
-			if silentHops >= MAX_SILENT_HOPS then
-				error(`dialogue resolution exceeded {MAX_SILENT_HOPS} silent nodes`, 2)
-			end
-			silentHops += 1
 			nodeId = node.fallback
 		elseif node.type == "action" then
 			if not executeActions then
-				return {
-					nodeId = nodeId,
-					node = node,
-					prepared = nil,
-				}
+				return { nodeId = nodeId, node = node, prepared = nil }
 			end
-			if silentHops >= MAX_SILENT_HOPS then
-				error(`dialogue resolution exceeded {MAX_SILENT_HOPS} silent nodes`, 2)
-			end
-			silentHops += 1
 
 			state.currentNodeId = nodeId
-			local generation = state.lifecycleGeneration
 			local result = Actions._execute(node.action, makeContext(self, state))
-
-			if
-				not state.active
-				or state.lifecycleGeneration ~= generation
-				or state.phase ~= "RESOLVING"
-				or state.currentNodeId ~= nodeId
-			then
+			if not state.active then
+				-- The handler cancelled this Session while it was running.
+				return nil
+			end
+			if not result.success then
+				warn(
+					`[MrDialogue][{result.code}] Action "{node.action.name}" failed: {tostring(
+						result.details
+					)}`
+				)
+				cancelSession(self, state, "action_error", true)
 				return nil
 			end
 
-			if not result.success then
-				failAction(self, state, node.action.name, result)
-			end
-
 			if node.next == nil then
-				return {
-					nodeId = nodeId,
-					node = IMPLICIT_END_NODE,
-					prepared = nil,
-				}
+				return { nodeId = nodeId, node = IMPLICIT_END_NODE, prepared = nil }
 			end
 			nodeId = node.next
 		else
-			return {
-				nodeId = nodeId,
-				node = node,
-				prepared = nil,
-			}
+			return { nodeId = nodeId, node = node, prepared = nil }
 		end
 	end
 end
 
+-- Resolution reached from a fresh start or an accepted choice: whatever comes next is shown at once,
+-- because the player has already interacted.
 local function moveToNode(self: Session, state: SessionState, nodeId: string)
 	local resolved = resolveNode(self, state, nodeId, true)
 	if not resolved then
 		return
 	end
+
+	state.currentNodeId = resolved.nodeId
 	if resolved.node.type == "end" then
-		state.currentNodeId = resolved.nodeId
 		endSession(self, state, resolved.node.result)
 		return
 	end
 
-	local prepared = resolved.prepared or prepareVisibleNode(state.definition, resolved.nodeId)
-	sendPreparedNode(self, state, prepared)
-	state.currentNodeId = resolved.nodeId
+	sendPreparedNode(
+		self,
+		state,
+		resolved.prepared or prepareVisibleNode(state.definition, resolved.nodeId)
+	)
 end
 
+-- Resolution reached from a line the player just finished reading: they owe one more click before
+-- anything new appears, so the destination is announced and held.
 local function prepareFollowingInteraction(self: Session, state: SessionState, nodeId: string)
 	local resolved = resolveNode(self, state, nodeId, false)
 	if not resolved then
 		return
 	end
+
 	if resolved.node.type == "end" then
 		sendReady(self, state, "READY_TO_FINISH", "finish", resolved.nodeId, resolved.node.result)
-		return
-	end
-
-	if resolved.prepared then
+	elseif resolved.prepared then
+		-- A promptless choice needs no acknowledgement; the options are the acknowledgement.
 		sendPreparedNode(self, state, resolved.prepared)
 		state.currentNodeId = resolved.nodeId
-		return
+	else
+		sendReady(self, state, "READY_TO_ADVANCE", "advance", resolved.nodeId, nil)
 	end
+end
 
-	sendReady(self, state, "READY_TO_ADVANCE", "advance", resolved.nodeId, nil)
+local function offerChoices(
+	self: Session,
+	state: SessionState,
+	nodeId: string,
+	node: Types.ChoiceNode
+)
+	local prepared = prepareChoiceOffer(self, state, node)
+	if prepared then
+		sendPreparedNode(self, state, prepared)
+		state.currentNodeId = nodeId
+	elseif node.fallback then
+		prepareFollowingInteraction(self, state, node.fallback)
+	else
+		cancelWithoutOptions(self, state, nodeId)
+	end
 end
 
 function Session.new(
@@ -468,20 +504,11 @@ function Session.new(
 	definition: Types.DialogueDefinition,
 	options: Types.SessionOptions?
 ): (Session?, string?)
-	if not RunService:IsServer() then
-		error("Dialogue:Start can only be called on the server", 3)
-	end
 	if typeof(player) ~= "Instance" or not player:IsA("Player") then
 		error("Dialogue:Start requires a Player", 3)
 	end
 	if options ~= nil and type(options) ~= "table" then
 		error("Dialogue:Start options must be a table", 3)
-	end
-	if options and options.npc ~= nil and typeof(options.npc) ~= "Instance" then
-		error("Dialogue:Start options.npc must be an Instance", 3)
-	end
-	if options and options.data ~= nil and type(options.data) ~= "table" then
-		error("Dialogue:Start options.data must be a table", 3)
 	end
 	if player.Parent ~= Players then
 		return nil, "player is not connected"
@@ -505,59 +532,35 @@ function Session.new(
 		active = true,
 		sessionId = sessionId,
 		phase = "RESOLVING",
-		expectedTurn = nil,
-		offeredOptions = nil,
-		pendingNodeId = nil,
-		pendingEndResult = nil,
-		lifecycleGeneration = 0,
 		clientStarted = false,
-		outcome = nil,
 	}
 	states[self] = state
 	activeSessions[player] = self
 
-	local resolvedOk, resolved = pcall(resolveNode, self, state, definition.entry, true)
-	if not resolvedOk then
-		states[self] = nil
-		if activeSessions[player] == self then
-			activeSessions[player] = nil
-		end
-		error(resolved, 3)
-	end
-
-	local initial = resolved :: ResolvedNode?
+	local initial = resolveNode(self, state, definition.entry, true)
 	if not initial then
 		return table.freeze(self) :: Session, nil
 	end
+
+	state.currentNodeId = initial.nodeId
 	if initial.node.type == "end" then
-		state.currentNodeId = initial.nodeId
-		Session._end(self, makeCompletedOutcome(initial.node.result))
+		-- Nothing was ever shown, so there is no final line for the player to acknowledge.
+		endSession(self, state, initial.node.result)
 		return table.freeze(self) :: Session, nil
 	end
 
 	local prepared = initial.prepared or prepareVisibleNode(definition, initial.nodeId)
-	state.currentNodeId = initial.nodeId
 	applyPreparedNode(state, prepared)
-	local startMessage: Net.StartMessage = {
+	Net._sendToClient(player, {
 		type = "start",
 		sessionId = sessionId,
 		dialogueId = dialogueId,
 		freezeCharacter = definition.freezeCharacter,
 		presentation = prepared.presentation,
 		choices = prepared.choices,
-	}
-
-	local sent, sendError = pcall(function()
-		Net._sendToClient(player, startMessage)
-	end)
-	if not sent then
-		states[self] = nil
-		if activeSessions[player] == self then
-			activeSessions[player] = nil
-		end
-		error(sendError, 3)
-	end
+	})
 	state.clientStarted = true
+	beginDeathMonitoring(self, state)
 
 	return table.freeze(self) :: Session, nil
 end
@@ -586,48 +589,43 @@ function Session.Cancel(self: Session, reason: any): boolean
 		return false
 	end
 
-	return cancelSession(self, state, cancelReason, self.Player.Parent == Players)
+	return cancelSession(self, state, cancelReason, true)
+end
+
+--[[
+	Every message the server sends carries a fresh single-use turn token naming the one reply it
+	expects back. Anything else — a duplicate, a replay, a click meant for the previous line — names
+	a token the server is no longer holding and is dropped.
+]]
+local function isExpectedTurn(state: SessionState, turn: any): boolean
+	return state.expectedTurn ~= nil and state.expectedTurn == turn
 end
 
 local function handlePresentationCompleted(self: Session, state: SessionState, message: any)
-	if
-		state.phase ~= "WAITING_PRESENTATION"
-		or type(message.turn) ~= "string"
-		or message.turn ~= state.expectedTurn
-	then
+	if state.phase ~= "WAITING_PRESENTATION" or not isExpectedTurn(state, message.turn) then
 		return
 	end
 
+	local nodeId = state.currentNodeId
+	local node = state.definition.nodes[nodeId]
 	beginResolving(state)
 
-	local node = state.definition.nodes[state.currentNodeId]
 	if node.type == "line" then
 		if node.next == nil then
 			sendReady(self, state, "READY_TO_FINISH", "finish", nil, nil)
 		else
 			prepareFollowingInteraction(self, state, node.next)
 		end
-		return
-	end
-
-	if node.type == "choice" and node.text ~= nil then
-		local prepared = prepareChoiceOffer(self, state, node)
-		local offeredOptions = prepared.offeredOptions
-		if offeredOptions and #offeredOptions > 0 then
-			sendPreparedNode(self, state, prepared)
-		elseif node.fallback then
-			prepareFollowingInteraction(self, state, node.fallback)
-		else
-			error(`choice node "{state.currentNodeId}" has no available options or fallback`, 2)
-		end
+	elseif node.type == "choice" then
+		-- The prompt has finished typing, so its options can appear without another click.
+		offerChoices(self, state, nodeId, node)
 	end
 end
 
 local function handleAdvance(self: Session, state: SessionState, message: any)
 	if
 		(state.phase ~= "READY_TO_ADVANCE" and state.phase ~= "READY_TO_FINISH")
-		or type(message.turn) ~= "string"
-		or message.turn ~= state.expectedTurn
+		or not isExpectedTurn(state, message.turn)
 	then
 		return
 	end
@@ -642,51 +640,34 @@ local function handleAdvance(self: Session, state: SessionState, message: any)
 			state.currentNodeId = pendingNodeId
 		end
 		endSession(self, state, pendingEndResult)
-		return
+	elseif pendingNodeId then
+		moveToNode(self, state, pendingNodeId)
 	end
-
-	if not pendingNodeId then
-		return
-	end
-
-	moveToNode(self, state, pendingNodeId)
 end
 
 local function handleChoose(self: Session, state: SessionState, message: any)
-	if
-		state.phase ~= "WAITING_CHOICE"
-		or type(message.turn) ~= "string"
-		or message.turn ~= state.expectedTurn
-		or type(message.index) ~= "number"
-		or message.index % 1 ~= 0
-	then
+	if state.phase ~= "WAITING_CHOICE" or not isExpectedTurn(state, message.turn) then
 		return
 	end
 
+	-- The client sends the index it displayed; the server maps it back through the exact offer it
+	-- made, so a fabricated index cannot reach a hidden option.
 	local offeredOptions = state.offeredOptions
 	local option = if offeredOptions then offeredOptions[message.index] else nil
 	if not option then
 		return
 	end
 
+	local nodeId = state.currentNodeId
 	beginResolving(state)
 
 	if
 		option.condition and not Conditions._evaluate(option.condition, makeContext(self, state))
 	then
-		local node = state.definition.nodes[state.currentNodeId]
-		if node.type ~= "choice" then
-			return
-		end
-
-		local prepared = prepareChoiceOffer(self, state, node)
-		local refreshedOptions = prepared.offeredOptions
-		if refreshedOptions and #refreshedOptions > 0 then
-			sendPreparedNode(self, state, prepared)
-		elseif node.fallback then
-			prepareFollowingInteraction(self, state, node.fallback)
-		else
-			error(`choice node "{state.currentNodeId}" has no available options or fallback`, 2)
+		-- It stopped being selectable while it was on screen: re-offer instead of honouring it.
+		local node = state.definition.nodes[nodeId]
+		if node.type == "choice" then
+			offerChoices(self, state, nodeId, node)
 		end
 		return
 	end
@@ -701,13 +682,7 @@ local function handleClientMessage(player: Player, message: any)
 
 	local self = activeSessions[player]
 	local state = if self then states[self] else nil
-	if
-		not self
-		or not state
-		or not state.active
-		or type(message.sessionId) ~= "string"
-		or message.sessionId ~= state.sessionId
-	then
+	if not self or not state or not state.active or message.sessionId ~= state.sessionId then
 		return
 	end
 
@@ -722,38 +697,7 @@ local function handleClientMessage(player: Player, message: any)
 	end
 end
 
-function Session._getActiveSession(player: Player): Session?
-	local session = activeSessions[player]
-	if session and session:IsActive() then
-		return session
-	end
-	return nil
-end
-
-function Session._getDefinition(self: Session): Types.DialogueDefinition
-	return states[self].definition
-end
-
-function Session._getCurrentNodeId(self: Session): string
-	return states[self].currentNodeId
-end
-
-function Session._setCurrentNodeId(self: Session, nodeId: string)
-	states[self].currentNodeId = nodeId
-end
-
-function Session._getNpc(self: Session): Instance?
-	return states[self].npc
-end
-
-function Session._getData(self: Session): { [string]: any }
-	return states[self].data
-end
-
-function Session._getSessionId(self: Session): string
-	return states[self].sessionId
-end
-
+-- The single gate every ending goes through; whichever path gets here first owns the outcome.
 function Session._end(self: Session, outcome: Types.SessionOutcome): boolean
 	local state = states[self]
 	if not state or not state.active then
@@ -761,29 +705,29 @@ function Session._end(self: Session, outcome: Types.SessionOutcome): boolean
 	end
 
 	state.active = false
-	state.lifecycleGeneration += 1
 	state.phase = "FINISHED"
 	state.expectedTurn = nil
 	state.offeredOptions = nil
 	state.pendingNodeId = nil
 	state.pendingEndResult = nil
 	state.outcome = outcome
+	disconnectDeathMonitoring(state)
 
 	if activeSessions[self.Player] == self then
 		activeSessions[self.Player] = nil
 	end
+
 	return true
 end
 
-if RunService:IsServer() then
-	Net._connectServer(handleClientMessage)
-	Players.PlayerRemoving:Connect(function(player)
-		local self = activeSessions[player]
-		local state = if self then states[self] else nil
-		if self and state and state.active then
-			cancelSession(self, state, "player_left", false)
-		end
-	end)
-end
+Net._connectServer(handleClientMessage)
+
+Players.PlayerRemoving:Connect(function(player)
+	local self = activeSessions[player]
+	local state = if self then states[self] else nil
+	if self and state and state.active then
+		cancelSession(self, state, "player_left", false)
+	end
+end)
 
 return table.freeze(Session)

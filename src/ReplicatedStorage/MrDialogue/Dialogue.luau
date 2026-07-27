@@ -8,16 +8,6 @@ local SessionClass = require(script.Parent.Session)
 local Dialogue = {}
 Dialogue.__index = Dialogue
 
-local SUPPORTED_NODE_TYPES: { [string]: boolean } = {
-	line = true,
-	choice = true,
-	branch = true,
-	action = true,
-	["end"] = true,
-}
-
-table.freeze(SUPPORTED_NODE_TYPES)
-
 export type Dialogue = {
 	Id: string,
 	Start: (
@@ -27,426 +17,334 @@ export type Dialogue = {
 	) -> (SessionClass.Session?, string?),
 }
 
-type DialogueInternal = Dialogue & { _definition: Types.DialogueDefinition }
+-- A named handler the definition depends on, remembered while validating so Start does not have to
+-- walk the graph again.
+type Requirement = {
+	kind: "condition" | "action",
+	name: string,
+	path: string,
+}
 
-local function assertNonEmptyString(value: any, field: string)
-	if type(value) ~= "string" or value == "" then
-		error(`MrDialogue.new: {field} must be a non-empty string`, 4)
-	end
+type DialogueInternal = Dialogue & {
+	_definition: Types.DialogueDefinition,
+	_requirements: { Requirement },
+}
+
+local NODE_TYPES: { [string]: boolean } = {
+	line = true,
+	choice = true,
+	branch = true,
+	action = true,
+	["end"] = true,
+}
+
+table.freeze(NODE_TYPES)
+
+-- Definitions are plain data authored elsewhere, so the message carries the path to the mistake and
+-- the error is raised without a position: a line number inside this validator helps nobody.
+local function fail(message: string): never
+	error(`MrDialogue.new: {message}`, 0)
 end
 
+--[[
+	Copies the definition so a game can keep editing (or reusing) the table it handed over, and
+	freezes it so nothing can rewrite a conversation that sessions are already walking.
+]]
 local function deepCopy(value: any, copies: { [any]: any }): any
 	if type(value) ~= "table" then
 		return value
 	end
 
-	local existingCopy = copies[value]
-	if existingCopy then
-		return existingCopy
+	local existing = copies[value]
+	if existing then
+		return existing
 	end
 
 	local copy = {}
 	copies[value] = copy
-
-	for key, nestedValue in pairs(value) do
-		copy[key] = deepCopy(nestedValue, copies)
+	for key, nested in pairs(value) do
+		copy[key] = deepCopy(nested, copies)
 	end
 
 	return table.freeze(copy)
 end
 
-local function validateConditionSpec(spec: any, path: string)
+local function validateSpec(kind: "condition" | "action", spec: any, path: string): Requirement
 	if type(spec) ~= "table" then
-		error(`MrDialogue.new: {path} must be a condition table`, 4)
+		fail(`{path} must be a table`)
 	end
 	if type(spec.name) ~= "string" or spec.name == "" then
-		error(`MrDialogue.new: {path}.name must be a non-empty string`, 4)
+		fail(`{path}.name must be a non-empty string`)
+	end
+	if spec.arguments ~= nil and type(spec.arguments) ~= "table" then
+		fail(`{path}.arguments must be an array`)
 	end
 
-	local arguments = spec.arguments
-	if arguments == nil then
-		return
-	end
-	if type(arguments) ~= "table" then
-		error(`MrDialogue.new: {path}.arguments must be an array`, 4)
-	end
+	return { kind = kind, name = spec.name, path = path }
+end
 
-	local argumentCount = 0
-	for index in pairs(arguments) do
-		if type(index) ~= "number" or index % 1 ~= 0 or index < 1 then
-			error(`MrDialogue.new: {path}.arguments must be a dense array`, 4)
-		end
-		argumentCount += 1
+local function validateTarget(definition: any, targetId: any, path: string)
+	if type(targetId) ~= "string" or targetId == "" then
+		fail(`{path} must be a node ID`)
 	end
-	for index = 1, argumentCount do
-		if arguments[index] == nil then
-			error(`MrDialogue.new: {path}.arguments must be a dense array`, 4)
-		end
+	if definition.nodes[targetId] == nil then
+		fail(`{path} points at "{targetId}", which does not exist`)
 	end
 end
 
-local function validateActionSpec(spec: any, path: string)
-	if type(spec) ~= "table" then
-		error(`MrDialogue.new: {path} must be an action table`, 4)
-	end
-	if type(spec.name) ~= "string" or spec.name == "" then
-		error(`MrDialogue.new: {path}.name must be a non-empty string`, 4)
+local function validateSpeakers(definition: any)
+	local speakers: { [any]: unknown }? = nil
+	local speakersValue = definition.speakers
+
+	if speakersValue ~= nil then
+		if type(speakersValue) ~= "table" then
+			fail("definition.speakers must be a table")
+		end
+
+		speakers = speakersValue :: { [any]: unknown }
 	end
 
-	local arguments = spec.arguments
-	if arguments == nil then
-		return
-	end
-	if type(arguments) ~= "table" then
-		error(`MrDialogue.new: {path}.arguments must be an array`, 4)
+	for speakerId, speakerValue in pairs(speakers or {}) do
+		local path = `speaker "{tostring(speakerId)}"`
+
+		if type(speakerValue) ~= "table" then
+			fail(`{path} must be a table with a non-empty name`)
+		end
+
+		local speaker = speakerValue :: { [string]: unknown }
+
+		local name = speaker.name
+		if type(name) ~= "string" or name == "" then
+			fail(`{path} must be a table with a non-empty name`)
+		end
+
+		local icon = speaker.icon
+		if icon ~= nil and type(icon) ~= "string" then
+			fail(`{path} icon must be a string`)
+		end
+
+		local emotionsValue = speaker.emotions
+		if emotionsValue ~= nil then
+			if type(emotionsValue) ~= "table" then
+				fail(`{path} emotions must be a table`)
+			end
+
+			local emotions = emotionsValue :: { [any]: unknown }
+
+			for emotion, emotionIcon in pairs(emotions) do
+				if type(emotionIcon) ~= "string" then
+					fail(`{path} emotion "{tostring(emotion)}" must map to an icon string`)
+				end
+			end
+		end
 	end
 
-	local argumentCount = 0
-	for index in pairs(arguments) do
-		if type(index) ~= "number" or index % 1 ~= 0 or index < 1 then
-			error(`MrDialogue.new: {path}.arguments must be a dense array`, 4)
-		end
-		argumentCount += 1
-	end
-	for index = 1, argumentCount do
-		if arguments[index] == nil then
-			error(`MrDialogue.new: {path}.arguments must be a dense array`, 4)
-		end
+	local defaultSpeaker = definition.defaultSpeaker
+	if defaultSpeaker ~= nil and (speakers == nil or speakers[defaultSpeaker] == nil) then
+		fail(`definition.defaultSpeaker references unknown speaker "{tostring(defaultSpeaker)}"`)
 	end
 end
 
-local function validatePresentation(nodeKind: string, nodeId: string, node: any, definition: any)
-	if
-		node.speaker ~= nil
-		and node.speaker ~= false
-		and (type(node.speaker) ~= "string" or node.speaker == "")
-	then
-		error(
-			`MrDialogue.new: {nodeKind} node "{nodeId}" speaker must be a non-empty string or false`,
-			4
-		)
-	end
-
+-- Mirrors the resolution order Session uses: an explicit speaker wins, `false` suppresses the
+-- dialogue default, and only then does defaultSpeaker apply.
+local function validatePresentation(nodeId: string, node: any, definition: any)
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
 	if speakerId == nil or speakerId == false then
 		if node.emotion ~= nil then
-			error(
-				`MrDialogue.new: {nodeKind} node "{nodeId}" cannot use an emotion without a speaker`,
-				4
-			)
+			fail(`node "{nodeId}" cannot use an emotion without a speaker`)
 		end
 		return
 	end
 
-	if type(speakerId) ~= "string" or speakerId == "" then
-		error(
-			`MrDialogue.new: {nodeKind} node "{nodeId}" speaker must be a non-empty string or false`,
-			4
-		)
+	if type(speakerId) ~= "string" then
+		fail(`node "{nodeId}" speaker must be a speaker key or false`)
 	end
 
 	local speakers = definition.speakers
-	local speaker = if type(speakers) == "table" then speakers[speakerId] else nil
-	if type(speaker) ~= "table" then
-		error(
-			`MrDialogue.new: {nodeKind} node "{nodeId}" references unknown speaker "{speakerId}"`,
-			4
-		)
+	local speaker = if speakers then speakers[speakerId] else nil
+	if speaker == nil then
+		fail(`node "{nodeId}" references unknown speaker "{speakerId}"`)
 	end
 
-	if type(speaker.name) ~= "string" or speaker.name == "" then
-		error(`MrDialogue.new: speaker "{speakerId}" must have a non-empty name`, 4)
+	if node.emotion == nil then
+		return
 	end
 
-	if node.emotion ~= nil then
-		if type(node.emotion) ~= "string" or node.emotion == "" then
-			error(
-				`MrDialogue.new: {nodeKind} node "{nodeId}" emotion must be a non-empty string`,
-				4
-			)
-		end
-
-		local emotions = speaker.emotions
-		local emotionIcon = if type(emotions) == "table" then emotions[node.emotion] else nil
-		if type(emotionIcon) ~= "string" then
-			error(
-				`MrDialogue.new: {nodeKind} node "{nodeId}" references unknown emotion "{node.emotion}"`,
-				4
-			)
-		end
-	elseif speaker.icon ~= nil then
-		if type(speaker.icon) ~= "string" then
-			error(`MrDialogue.new: speaker "{speakerId}" icon must be a string`, 4)
-		end
-	elseif definition.defaultIcon ~= nil and type(definition.defaultIcon) ~= "string" then
-		error("MrDialogue.new: definition.defaultIcon must be a string", 4)
+	local emotions = speaker.emotions
+	if type(emotions) ~= "table" or emotions[node.emotion] == nil then
+		fail(`node "{nodeId}" references unknown emotion "{tostring(node.emotion)}"`)
 	end
 end
 
 local function validateLine(nodeId: string, node: any, definition: any)
 	if type(node.text) ~= "string" then
-		error(`MrDialogue.new: line node "{nodeId}" text must be a string`, 4)
+		fail(`line node "{nodeId}" text must be a string`)
 	end
 
-	validatePresentation("line", nodeId, node, definition)
+	validatePresentation(nodeId, node, definition)
 
 	if node.next ~= nil then
-		if type(node.next) ~= "string" or node.next == "" then
-			error(`MrDialogue.new: line node "{nodeId}" next must be a non-empty string`, 4)
-		end
-
-		local target = definition.nodes[node.next]
-		if type(target) ~= "table" then
-			error(`MrDialogue.new: line node "{nodeId}" target "{node.next}" does not exist`, 4)
-		end
-		if
-			target.type ~= "line"
-			and target.type ~= "choice"
-			and target.type ~= "branch"
-			and target.type ~= "action"
-			and target.type ~= "end"
-		then
-			error(
-				`MrDialogue.new: line node "{nodeId}" target must be a line, choice, branch, action, or end`,
-				4
-			)
-		end
+		validateTarget(definition, node.next, `line node "{nodeId}" next`)
 	end
 end
 
-local function validateChoice(nodeId: string, node: any, definition: any)
+local function validateChoice(
+	nodeId: string,
+	node: any,
+	definition: any,
+	requirements: { Requirement }
+)
 	if node.text ~= nil then
 		if type(node.text) ~= "string" then
-			error(`MrDialogue.new: choice node "{nodeId}" text must be a string`, 4)
+			fail(`choice node "{nodeId}" text must be a string`)
 		end
-		validatePresentation("choice", nodeId, node, definition)
+		validatePresentation(nodeId, node, definition)
 	elseif node.speaker ~= nil or node.emotion ~= nil then
-		error(`MrDialogue.new: promptless choice node "{nodeId}" cannot set speaker or emotion`, 4)
+		fail(`promptless choice node "{nodeId}" cannot set a speaker or emotion`)
 	end
 
-	if type(node.options) ~= "table" then
-		error(`MrDialogue.new: choice node "{nodeId}" options must be an array`, 4)
+	if type(node.options) ~= "table" or #node.options == 0 then
+		fail(`choice node "{nodeId}" must contain at least one option`)
 	end
 
-	local optionCount = 0
-	for index in pairs(node.options) do
-		if type(index) ~= "number" or index % 1 ~= 0 or index < 1 then
-			error(`MrDialogue.new: choice node "{nodeId}" options must be a dense array`, 4)
-		end
-		optionCount += 1
-	end
-
-	if optionCount == 0 then
-		error(`MrDialogue.new: choice node "{nodeId}" must contain at least one option`, 4)
-	end
-
-	local optionIds = {}
-	for index = 1, optionCount do
-		local option = node.options[index]
+	local usedIds = {}
+	for index, option in ipairs(node.options) do
+		local path = `choice node "{nodeId}" option {index}`
 		if type(option) ~= "table" then
-			error(`MrDialogue.new: choice node "{nodeId}" options must be a dense array`, 4)
+			fail(`{path} must be a table`)
 		end
-
 		if type(option.id) ~= "string" or option.id == "" then
-			error(`MrDialogue.new: choice node "{nodeId}" option {index} must have an ID`, 4)
+			fail(`{path} must have a non-empty id`)
 		end
-		if optionIds[option.id] then
-			error(`MrDialogue.new: choice node "{nodeId}" has duplicate option ID "{option.id}"`, 4)
+		if usedIds[option.id] then
+			fail(`{path} reuses the id "{option.id}"`)
 		end
-		optionIds[option.id] = true
+		usedIds[option.id] = true
 
 		if type(option.text) ~= "string" then
-			error(`MrDialogue.new: choice node "{nodeId}" option {index} text must be a string`, 4)
+			fail(`{path} text must be a string`)
 		end
-
-		if type(option.next) ~= "string" or option.next == "" then
-			error(`MrDialogue.new: choice node "{nodeId}" option {index} must have a target`, 4)
-		end
+		validateTarget(definition, option.next, `{path} next`)
 
 		if option.condition ~= nil then
-			validateConditionSpec(
-				option.condition,
-				`choice node "{nodeId}" option {index} condition`
-			)
-		end
-
-		local target = definition.nodes[option.next]
-		if type(target) ~= "table" then
-			error(
-				`MrDialogue.new: choice node "{nodeId}" option {index} target "{option.next}" does not exist`,
-				4
-			)
-		end
-		if
-			target.type ~= "line"
-			and target.type ~= "choice"
-			and target.type ~= "branch"
-			and target.type ~= "action"
-			and target.type ~= "end"
-		then
-			error(
-				`MrDialogue.new: choice node "{nodeId}" option {index} target must be a line, choice, branch, action, or end`,
-				4
+			table.insert(
+				requirements,
+				validateSpec("condition", option.condition, `{path} condition`)
 			)
 		end
 	end
 
 	if node.fallback ~= nil then
-		if type(node.fallback) ~= "string" or node.fallback == "" then
-			error(`MrDialogue.new: choice node "{nodeId}" fallback must be a non-empty string`, 4)
-		end
-
-		local fallback = definition.nodes[node.fallback]
-		if type(fallback) ~= "table" then
-			error(
-				`MrDialogue.new: choice node "{nodeId}" fallback target "{node.fallback}" does not exist`,
-				4
-			)
-		end
-		if
-			fallback.type ~= "line"
-			and fallback.type ~= "choice"
-			and fallback.type ~= "branch"
-			and fallback.type ~= "action"
-			and fallback.type ~= "end"
-		then
-			error(
-				`MrDialogue.new: choice node "{nodeId}" fallback must target a line, choice, branch, action, or end`,
-				4
-			)
-		end
+		validateTarget(definition, node.fallback, `choice node "{nodeId}" fallback`)
 	end
 end
 
-local function validateBranch(nodeId: string, node: any, definition: any)
-	validateConditionSpec(node.condition, `branch node "{nodeId}" condition`)
-
-	for _, field in ipairs({ "onTrue", "onFalse" }) do
-		local targetId = node[field]
-		if type(targetId) ~= "string" or targetId == "" then
-			error(`MrDialogue.new: branch node "{nodeId}" {field} must be a non-empty string`, 4)
-		end
-
-		local target = definition.nodes[targetId]
-		if type(target) ~= "table" then
-			error(
-				`MrDialogue.new: branch node "{nodeId}" {field} target "{targetId}" does not exist`,
-				4
-			)
-		end
-		if
-			target.type ~= "line"
-			and target.type ~= "choice"
-			and target.type ~= "branch"
-			and target.type ~= "action"
-			and target.type ~= "end"
-		then
-			error(
-				`MrDialogue.new: branch node "{nodeId}" {field} must target a line, choice, branch, action, or end`,
-				4
-			)
-		end
-	end
+local function validateBranch(
+	nodeId: string,
+	node: any,
+	definition: any,
+	requirements: { Requirement }
+)
+	table.insert(
+		requirements,
+		validateSpec("condition", node.condition, `branch node "{nodeId}" condition`)
+	)
+	validateTarget(definition, node.onTrue, `branch node "{nodeId}" onTrue`)
+	validateTarget(definition, node.onFalse, `branch node "{nodeId}" onFalse`)
 end
 
-local function validateAction(nodeId: string, node: any, definition: any)
-	validateActionSpec(node.action, `action node "{nodeId}" action`)
-	if node.next == nil then
-		return
-	end
-	if type(node.next) ~= "string" or node.next == "" then
-		error(`MrDialogue.new: action node "{nodeId}" next must be a non-empty string`, 4)
-	end
-	if type(definition.nodes[node.next]) ~= "table" then
-		error(`MrDialogue.new: action node "{nodeId}" target "{node.next}" does not exist`, 4)
-	end
-end
+local function validateAction(
+	nodeId: string,
+	node: any,
+	definition: any,
+	requirements: { Requirement }
+)
+	table.insert(requirements, validateSpec("action", node.action, `action node "{nodeId}" action`))
 
-local function validateEnd(nodeId: string, node: any)
-	if node.result ~= nil and type(node.result) ~= "string" then
-		error(`MrDialogue.new: end node "{nodeId}" result must be a string`, 4)
+	if node.next ~= nil then
+		validateTarget(definition, node.next, `action node "{nodeId}" next`)
 	end
 end
 
 function Dialogue.new(definition: any): Dialogue
 	if type(definition) ~= "table" then
-		error("MrDialogue.new: definition must be a table", 3)
+		fail("definition must be a table")
 	end
-
 	if definition.format ~= 1 then
-		error("MrDialogue.new: definition.format must be 1", 3)
+		fail("definition.format must be 1")
 	end
-
-	assertNonEmptyString(definition.id, "definition.id")
-	assertNonEmptyString(definition.entry, "definition.entry")
-
-	if definition.freezeCharacter ~= nil and type(definition.freezeCharacter) ~= "boolean" then
-		error("MrDialogue.new: definition.freezeCharacter must be a boolean", 3)
+	if type(definition.id) ~= "string" or definition.id == "" then
+		fail("definition.id must be a non-empty string")
 	end
-
 	if type(definition.nodes) ~= "table" then
-		error("MrDialogue.new: definition.nodes must be a table", 3)
+		fail("definition.nodes must be a table")
+	end
+	if definition.defaultIcon ~= nil and type(definition.defaultIcon) ~= "string" then
+		fail("definition.defaultIcon must be a string")
+	end
+	if definition.freezeCharacter ~= nil and type(definition.freezeCharacter) ~= "boolean" then
+		fail("definition.freezeCharacter must be a boolean")
+	end
+	if
+		definition.endDialogueOnDeath ~= nil
+		and type(definition.endDialogueOnDeath) ~= "boolean"
+	then
+		fail("definition.endDialogueOnDeath must be a boolean")
 	end
 
+	validateSpeakers(definition)
+
+	local requirements: { Requirement } = {}
 	for nodeId, node in pairs(definition.nodes) do
 		if type(nodeId) ~= "string" or nodeId == "" then
-			error("MrDialogue.new: node IDs must be non-empty strings", 3)
+			fail("node IDs must be non-empty strings")
 		end
-
-		if type(node) ~= "table" then
-			error(`MrDialogue.new: node "{nodeId}" must be a table`, 3)
-		end
-
-		if type(node.type) ~= "string" or not SUPPORTED_NODE_TYPES[node.type] then
-			error(`MrDialogue.new: node "{nodeId}" has an unsupported type`, 3)
+		if type(node) ~= "table" or not NODE_TYPES[node.type] then
+			fail(`node "{nodeId}" must be a line, choice, branch, action, or end node`)
 		end
 
 		if node.type == "line" then
 			validateLine(nodeId, node, definition)
 		elseif node.type == "choice" then
-			validateChoice(nodeId, node, definition)
+			validateChoice(nodeId, node, definition, requirements)
 		elseif node.type == "branch" then
-			validateBranch(nodeId, node, definition)
+			validateBranch(nodeId, node, definition, requirements)
 		elseif node.type == "action" then
-			validateAction(nodeId, node, definition)
+			validateAction(nodeId, node, definition, requirements)
 		elseif node.type == "end" then
-			validateEnd(nodeId, node)
+			if node.result ~= nil and type(node.result) ~= "string" then
+				fail(`end node "{nodeId}" result must be a string`)
+			end
 		end
 	end
 
-	if type(definition.nodes[definition.entry]) ~= "table" then
-		error(`MrDialogue.new: entry node "{definition.entry}" does not exist`, 3)
-	end
+	validateTarget(definition, definition.entry, "definition.entry")
 
-	local copiedDefinition = deepCopy(definition, {}) :: Types.DialogueDefinition
 	local self: DialogueInternal = setmetatable({
-		Id = copiedDefinition.id,
-		_definition = copiedDefinition,
+		Id = definition.id,
+		_definition = deepCopy(definition, {}),
+		_requirements = table.freeze(requirements),
 	}, Dialogue) :: any
 
 	return table.freeze(self)
 end
 
+--[[
+	Handler registration is checked here rather than in `new` because games routinely load their
+	dialogue before the quest or inventory service that backs it has registered anything.
+]]
 function Dialogue.Start(
 	self: DialogueInternal,
 	player: Player,
 	options: Types.SessionOptions?
 ): (SessionClass.Session?, string?)
-	for nodeId, node in pairs(self._definition.nodes) do
-		if node.type == "branch" and not Conditions._isRegistered(node.condition.name) then
-			return nil,
-				`condition "{node.condition.name}" used by branch node "{nodeId}" is not registered`
-		elseif node.type == "choice" then
-			for index, option in ipairs(node.options) do
-				local condition = option.condition
-				if condition and not Conditions._isRegistered(condition.name) then
-					return nil,
-						`condition "{condition.name}" used by choice node "{nodeId}" option {index} is not registered`
-				end
-			end
-		elseif node.type == "action" and not Actions._isRegistered(node.action.name) then
-			return nil,
-				`action "{node.action.name}" used by action node "{nodeId}" is not registered`
+	for _, requirement in ipairs(self._requirements) do
+		local registered = if requirement.kind == "condition"
+			then Conditions._isRegistered(requirement.name)
+			else Actions._isRegistered(requirement.name)
+
+		if not registered then
+			return nil, `{requirement.path} "{requirement.name}" is not registered`
 		end
 	end
 

@@ -30,6 +30,14 @@ type OptionBinding = {
 
 type ContinueMode = "DISABLED" | "TYPING" | "ADVANCE" | "FINISH"
 
+-- A panel that slides in from off-screen and back out again.
+type Slide = {
+	frame: GuiObject,
+	shown: UDim2,
+	hidden: UDim2,
+	tween: Tween?,
+}
+
 type GuiReferences = {
 	gui: ScreenGui,
 	dialogueFrame: GuiObject,
@@ -46,14 +54,9 @@ type GuiReferences = {
 type DefaultAdapterState = GuiReferences & {
 	typewriter: TypewriterClass.Typewriter,
 	typewriterConfig: TypewriterClass.TypewriterConfig,
-	typewriterConnection: RBXScriptConnection?,
-	continueConnection: RBXScriptConnection?,
-	inputConnection: RBXScriptConnection?,
-	preferredInputConnection: RBXScriptConnection?,
-	dialogueTween: Tween?,
-	optionsTween: Tween?,
-	dialoguePosition: UDim2,
-	optionsPosition: UDim2,
+	connections: { RBXScriptConnection },
+	dialogueSlide: Slide,
+	optionsSlide: Slide,
 	defaultFreezeCharacter: boolean,
 	freezeCharacter: boolean,
 	frozenHumanoid: Humanoid?,
@@ -64,7 +67,6 @@ type DefaultAdapterState = GuiReferences & {
 	currentRunId: number?,
 	presentationCompleted: (() -> ())?,
 	optionBindings: { OptionBinding },
-	choiceGeneration: number,
 	choiceLocked: boolean,
 	choose: ((index: number) -> ())?,
 	destroyed: boolean,
@@ -72,7 +74,7 @@ type DefaultAdapterState = GuiReferences & {
 
 local states: { [DefaultAdapter]: DefaultAdapterState } = setmetatable({}, { __mode = "k" }) :: any
 
-local NUMBER_KEYS: { [Enum.KeyCode]: number } = {
+local NUMBER_KEYS: { [Enum.KeyCode]: number } = table.freeze({
 	[Enum.KeyCode.One] = 1,
 	[Enum.KeyCode.Two] = 2,
 	[Enum.KeyCode.Three] = 3,
@@ -82,27 +84,18 @@ local NUMBER_KEYS: { [Enum.KeyCode]: number } = {
 	[Enum.KeyCode.Seven] = 7,
 	[Enum.KeyCode.Eight] = 8,
 	[Enum.KeyCode.Nine] = 9,
-}
+})
 
 local APPEAR_TWEEN_INFO = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 local DISAPPEAR_TWEEN_INFO = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
 
-local function getPlayerGui(): PlayerGui
+local function resolveGui(explicitGui: ScreenGui?): ScreenGui
 	local player = Players.LocalPlayer
 	if not player then
 		error("MrDialogue.DefaultAdapter requires a LocalPlayer", 3)
 	end
 
 	local playerGui = player:WaitForChild("PlayerGui")
-	if not playerGui:IsA("PlayerGui") then
-		error("LocalPlayer.PlayerGui must be a PlayerGui", 3)
-	end
-
-	return playerGui
-end
-
-local function resolveGui(explicitGui: ScreenGui?): ScreenGui
-	local playerGui = getPlayerGui()
 	if explicitGui then
 		if explicitGui.Parent == nil then
 			explicitGui.Parent = playerGui
@@ -118,14 +111,11 @@ local function resolveGui(explicitGui: ScreenGui?): ScreenGui
 		return existing
 	end
 
+	-- Nothing in StarterGui, so fall back to the copy packaged with the library.
 	local assets = script.Parent:FindFirstChild("Assets")
-	if not assets or not assets:IsA("Folder") then
-		error("MrDialogue is missing its Assets folder", 3)
-	end
-
-	local template = assets:FindFirstChild("DialogueGui")
+	local template = if assets then assets:FindFirstChild("DialogueGui") else nil
 	if not template or not template:IsA("ScreenGui") then
-		error("MrDialogue.Assets.DialogueGui must be a ScreenGui", 3)
+		error("MrDialogue.Assets.DialogueGui is missing", 3)
 	end
 
 	local gui = template:Clone()
@@ -137,91 +127,41 @@ local function expectChild(
 	parent: Instance?,
 	name: string,
 	className: string,
-	path: string,
 	issues: { string }
 ): Instance?
 	if not parent then
-		table.insert(issues, `{path} is missing; expected {className}`)
-		return nil
+		return nil -- Its own absence was already reported; don't pile on.
 	end
 
 	local child = parent:FindFirstChild(name)
 	if not child then
-		table.insert(issues, `{path} is missing; expected {className}`)
+		table.insert(issues, `{parent:GetFullName()}.{name} is missing; expected a {className}`)
 		return nil
 	end
 	if not child:IsA(className) then
-		table.insert(issues, `{path} must be a {className}, got {child.ClassName}`)
+		table.insert(issues, `{child:GetFullName()} must be a {className}, not a {child.ClassName}`)
 		return nil
 	end
 
 	return child
 end
 
+-- Reports everything wrong with the GUI at once: fixing a template one error per run is miserable.
 local function validateGui(gui: ScreenGui): GuiReferences
 	local issues = {}
-	local dialogueFrame =
-		expectChild(gui, "DialogueFrame", "GuiObject", "DialogueGui.DialogueFrame", issues)
-	local continueButton = expectChild(
-		dialogueFrame,
-		"ContinueButton",
-		"GuiButton",
-		"DialogueGui.DialogueFrame.ContinueButton",
-		issues
-	)
-	local npcIcon = expectChild(
-		dialogueFrame,
-		"NpcIcon",
-		"ImageLabel",
-		"DialogueGui.DialogueFrame.NpcIcon",
-		issues
-	)
-	local dialogueScroller = expectChild(
-		dialogueFrame,
-		"DialogueLabel",
-		"ScrollingFrame",
-		"DialogueGui.DialogueFrame.DialogueLabel",
-		issues
-	)
-	local dialogueLabel = expectChild(
-		dialogueScroller,
-		"TextLabel",
-		"TextLabel",
-		"DialogueGui.DialogueFrame.DialogueLabel.TextLabel",
-		issues
-	)
-	local npcName = expectChild(
-		dialogueFrame,
-		"NpcName",
-		"TextLabel",
-		"DialogueGui.DialogueFrame.NpcName",
-		issues
-	)
-	local optionsPanel =
-		expectChild(gui, "OptionsFrame", "GuiObject", "DialogueGui.OptionsFrame", issues)
-	local optionsContainer = expectChild(
-		optionsPanel,
-		"OptionsFrame",
-		"ScrollingFrame",
-		"DialogueGui.OptionsFrame.OptionsFrame",
-		issues
-	)
-	local optionTemplate = expectChild(
-		optionsContainer,
-		"OptionTemplate",
-		"GuiButton",
-		"DialogueGui.OptionsFrame.OptionsFrame.OptionTemplate",
-		issues
-	)
+	local dialogueFrame = expectChild(gui, "DialogueFrame", "GuiObject", issues)
+	local continueButton = expectChild(dialogueFrame, "ContinueButton", "GuiButton", issues)
+	local npcIcon = expectChild(dialogueFrame, "NpcIcon", "ImageLabel", issues)
+	local npcName = expectChild(dialogueFrame, "NpcName", "TextLabel", issues)
+	local dialogueScroller = expectChild(dialogueFrame, "DialogueLabel", "ScrollingFrame", issues)
+	local dialogueLabel = expectChild(dialogueScroller, "TextLabel", "TextLabel", issues)
+	local optionsPanel = expectChild(gui, "OptionsFrame", "GuiObject", issues)
+	local optionsContainer = expectChild(optionsPanel, "OptionsFrame", "ScrollingFrame", issues)
+	local optionTemplate = expectChild(optionsContainer, "OptionTemplate", "GuiButton", issues)
 
+	-- A TextButton carries its own text; an ImageButton needs a label to put it in.
 	if optionTemplate and optionTemplate:IsA("ImageButton") then
-		expectChild(
-			optionTemplate,
-			"TextLabel",
-			"TextLabel",
-			"DialogueGui.OptionsFrame.OptionsFrame.OptionTemplate.TextLabel",
-			issues
-		)
+		expectChild(optionTemplate, "TextLabel", "TextLabel", issues)
 	end
 
 	if #issues > 0 then
@@ -240,6 +180,63 @@ local function validateGui(gui: ScreenGui): GuiReferences
 		optionsContainer = optionsContainer :: ScrollingFrame,
 		optionTemplate = optionTemplate :: GuiButton,
 	}
+end
+
+local function newSlide(frame: GuiObject, hidden: UDim2): Slide
+	return {
+		frame = frame,
+		shown = frame.Position,
+		hidden = hidden,
+		tween = nil,
+	}
+end
+
+local function stopSlide(slide: Slide)
+	local tween = slide.tween
+	slide.tween = nil
+	if tween then
+		tween:Cancel()
+	end
+end
+
+local function resetSlide(slide: Slide)
+	stopSlide(slide)
+	slide.frame.Position = slide.shown
+end
+
+local function slideIn(slide: Slide)
+	stopSlide(slide)
+	slide.frame.Position = slide.hidden
+	slide.frame.Visible = true
+
+	local tween = TweenService:Create(slide.frame, APPEAR_TWEEN_INFO, { Position = slide.shown })
+	slide.tween = tween
+	tween:Play()
+end
+
+local function slideOut(slide: Slide, completed: () -> ())
+	stopSlide(slide)
+	if not slide.frame.Visible then
+		slide.frame.Position = slide.shown
+		completed()
+		return
+	end
+
+	local tween =
+		TweenService:Create(slide.frame, DISAPPEAR_TWEEN_INFO, { Position = slide.hidden })
+	slide.tween = tween
+	tween.Completed:Once(function(playbackState)
+		-- A new slide may have started while this one was playing; it owns the frame now.
+		if slide.tween ~= tween or playbackState ~= Enum.PlaybackState.Completed then
+			return
+		end
+
+		slide.tween = nil
+		slide.frame.Visible = false
+		slide.frame.Position = slide.shown
+		completed()
+	end)
+	tween:Play()
 end
 
 local function setContinueEnabled(state: DefaultAdapterState, enabled: boolean)
@@ -287,132 +284,6 @@ local function freezeCharacterMovement(state: DefaultAdapterState)
 	humanoid.JumpHeight = 0
 end
 
-local function cancelDialogueTween(state: DefaultAdapterState)
-	local tween = state.dialogueTween
-	state.dialogueTween = nil
-	if tween then
-		tween:Cancel()
-	end
-end
-
-local function resetDialogueTween(state: DefaultAdapterState)
-	cancelDialogueTween(state)
-	state.dialogueFrame.Position = state.dialoguePosition
-end
-
-local function getDialogueHiddenPosition(state: DefaultAdapterState): UDim2
-	local originalPosition = state.dialoguePosition
-	return UDim2.new(
-		originalPosition.X.Scale,
-		originalPosition.X.Offset,
-		2,
-		originalPosition.Y.Offset
-	)
-end
-
-local function playDialogueTween(state: DefaultAdapterState)
-	resetDialogueTween(state)
-	local originalPosition = state.dialoguePosition
-	state.dialogueFrame.Position = getDialogueHiddenPosition(state)
-	state.dialogueFrame.Visible = true
-
-	local tween =
-		TweenService:Create(state.dialogueFrame, APPEAR_TWEEN_INFO, { Position = originalPosition })
-	state.dialogueTween = tween
-	tween:Play()
-end
-
-local function playDialogueExitTween(state: DefaultAdapterState, completed: () -> ())
-	cancelDialogueTween(state)
-	if not state.gui.Enabled or not state.dialogueFrame.Visible then
-		state.dialogueFrame.Position = state.dialoguePosition
-		state.dialogueFrame.Visible = false
-		completed()
-		return
-	end
-
-	local tween = TweenService:Create(
-		state.dialogueFrame,
-		DISAPPEAR_TWEEN_INFO,
-		{ Position = getDialogueHiddenPosition(state) }
-	)
-	state.dialogueTween = tween
-	tween.Completed:Once(function(playbackState)
-		if state.dialogueTween ~= tween or playbackState ~= Enum.PlaybackState.Completed then
-			return
-		end
-
-		state.dialogueTween = nil
-		state.dialogueFrame.Visible = false
-		state.dialogueFrame.Position = state.dialoguePosition
-		completed()
-	end)
-	tween:Play()
-end
-
-local function cancelOptionsTween(state: DefaultAdapterState)
-	local tween = state.optionsTween
-	state.optionsTween = nil
-	if tween then
-		tween:Cancel()
-	end
-end
-
-local function resetOptionsTween(state: DefaultAdapterState)
-	cancelOptionsTween(state)
-	state.optionsPanel.Position = state.optionsPosition
-end
-
-local function getOptionsHiddenPosition(state: DefaultAdapterState): UDim2
-	local originalPosition = state.optionsPosition
-	return UDim2.new(
-		2,
-		originalPosition.X.Offset,
-		originalPosition.Y.Scale,
-		originalPosition.Y.Offset
-	)
-end
-
-local function playOptionsTween(state: DefaultAdapterState)
-	resetOptionsTween(state)
-	local originalPosition = state.optionsPosition
-	state.optionsPanel.Position = getOptionsHiddenPosition(state)
-	state.optionsContainer.Visible = true
-	state.optionsPanel.Visible = true
-
-	local tween =
-		TweenService:Create(state.optionsPanel, APPEAR_TWEEN_INFO, { Position = originalPosition })
-	state.optionsTween = tween
-	tween:Play()
-end
-
-local function playOptionsExitTween(state: DefaultAdapterState, completed: () -> ())
-	cancelOptionsTween(state)
-	if not state.optionsPanel.Visible then
-		state.optionsPanel.Position = state.optionsPosition
-		completed()
-		return
-	end
-
-	local tween = TweenService:Create(
-		state.optionsPanel,
-		DISAPPEAR_TWEEN_INFO,
-		{ Position = getOptionsHiddenPosition(state) }
-	)
-	state.optionsTween = tween
-	tween.Completed:Once(function(playbackState)
-		if state.optionsTween ~= tween or playbackState ~= Enum.PlaybackState.Completed then
-			return
-		end
-
-		state.optionsTween = nil
-		state.optionsPanel.Visible = false
-		state.optionsPanel.Position = state.optionsPosition
-		completed()
-	end)
-	tween:Play()
-end
-
 local function clearDialogueSelection(state: DefaultAdapterState)
 	local selectedObject = GuiService.SelectedObject
 	if selectedObject and selectedObject:IsDescendantOf(state.gui) then
@@ -420,6 +291,10 @@ local function clearDialogueSelection(state: DefaultAdapterState)
 	end
 end
 
+--[[
+	Keeps the gamepad cursor on whatever is actually actionable. Mouse and touch players get no
+	selection at all, since a highlighted button they never asked for looks like a bug.
+]]
 local function updateDialogueSelection(state: DefaultAdapterState)
 	if not state.gui.Enabled or UserInputService.PreferredInput ~= Enum.PreferredInput.Gamepad then
 		clearDialogueSelection(state)
@@ -437,19 +312,15 @@ local function updateDialogueSelection(state: DefaultAdapterState)
 		local firstBinding = state.optionBindings[1]
 		if firstBinding then
 			GuiService.SelectedObject = firstBinding.button
+			return
 		end
-		return
 	end
 
-	if
-		(not state.optionsPanel.Visible or state.choiceLocked)
-		and state.continueMode ~= "DISABLED"
-	then
+	if state.continueMode == "DISABLED" then
+		clearDialogueSelection(state)
+	else
 		GuiService.SelectedObject = state.continueButton
-		return
 	end
-
-	clearDialogueSelection(state)
 end
 
 local function setContinueMode(state: DefaultAdapterState, mode: ContinueMode, action: (() -> ())?)
@@ -461,9 +332,7 @@ end
 
 local function activateContinue(state: DefaultAdapterState)
 	if
-		not state.gui.Enabled
-		or (state.optionsPanel.Visible and not state.choiceLocked)
-		or state.continueMode == "DISABLED"
+		state.continueMode == "DISABLED" or (state.optionsPanel.Visible and not state.choiceLocked)
 	then
 		return
 	end
@@ -472,6 +341,7 @@ local function activateContinue(state: DefaultAdapterState)
 	local action = state.continueAction
 	setContinueMode(state, "DISABLED", nil)
 
+	-- While text is still typing the click only completes it. Advancing is a second, separate click.
 	if mode == "TYPING" then
 		state.typewriter:Skip()
 	elseif action then
@@ -494,11 +364,9 @@ local function applySpeaker(state: DefaultAdapterState, speaker: Net.SpeakerPayl
 
 	state.npcName.Text = speaker.name
 	state.npcName.Visible = true
+
 	local icon = speaker.icon
-	if icon == nil or icon == "" then
-		state.npcIcon.Image = ""
-		state.npcIcon.Visible = false
-	else
+	if icon then
 		state.npcIcon.Image = icon
 		state.npcIcon.Visible = true
 	end
@@ -506,10 +374,6 @@ end
 
 local function clearChoiceSelection(state: DefaultAdapterState)
 	local selectedObject = GuiService.SelectedObject
-	if not selectedObject then
-		return
-	end
-
 	for _, binding in ipairs(state.optionBindings) do
 		if selectedObject == binding.button then
 			GuiService.SelectedObject = nil
@@ -518,7 +382,19 @@ local function clearChoiceSelection(state: DefaultAdapterState)
 	end
 end
 
-local function destroyOptionBindings(state: DefaultAdapterState)
+local function lockOptions(state: DefaultAdapterState)
+	clearChoiceSelection(state)
+	state.choiceLocked = true
+	state.choose = nil
+
+	for _, binding in ipairs(state.optionBindings) do
+		binding.button.Active = false
+		binding.button.AutoButtonColor = false
+		binding.button.Selectable = false
+	end
+end
+
+local function releaseOptions(state: DefaultAdapterState)
 	for _, binding in ipairs(state.optionBindings) do
 		binding.connection:Disconnect()
 		binding.button:Destroy()
@@ -526,77 +402,47 @@ local function destroyOptionBindings(state: DefaultAdapterState)
 	table.clear(state.optionBindings)
 end
 
+-- Buttons are locked immediately but only destroyed once they are off-screen, so the slide-out has
+-- something left to animate.
 local function clearOptions(state: DefaultAdapterState, animate: boolean?)
-	clearChoiceSelection(state)
-	state.choiceGeneration += 1
-	state.choiceLocked = true
-	state.choose = nil
-	for _, binding in ipairs(state.optionBindings) do
-		binding.connection:Disconnect()
-		binding.button.Active = false
-		binding.button.AutoButtonColor = false
-		binding.button.Selectable = false
-	end
+	lockOptions(state)
 
 	if animate and state.optionsPanel.Visible then
-		playOptionsExitTween(state, function()
-			destroyOptionBindings(state)
+		slideOut(state.optionsSlide, function()
+			releaseOptions(state)
 			updateDialogueSelection(state)
 		end)
 	else
-		resetOptionsTween(state)
-		destroyOptionBindings(state)
+		resetSlide(state.optionsSlide)
+		releaseOptions(state)
 		state.optionsPanel.Visible = false
 	end
 end
 
-local function formatOptionText(index: number, text: string): string
-	local expectedPrefix = `{index}.`
-	if string.sub(text, 1, #expectedPrefix) == expectedPrefix then
-		return text
-	end
-
-	local content = string.gsub(text, "^%s*%d+%.%s*", "", 1)
-	return `{expectedPrefix} {content}`
-end
-
+-- Options are numbered so the 1-9 shortcuts match what the player is reading.
 local function setOptionText(button: GuiButton, index: number, text: string)
-	local formattedText = formatOptionText(index, text)
+	local content = string.gsub(text, "^%s*%d+%.%s*", "", 1)
+	local numbered = `{index}. {content}`
+
 	if button:IsA("TextButton") then
-		button.Text = formattedText
+		button.Text = numbered
 		return
 	end
 
 	local label = button:FindFirstChild("TextLabel")
-	if not label or not label:IsA("TextLabel") then
-		error("OptionTemplate ImageButton requires a TextLabel child", 2)
-	end
-	label.Text = formattedText
-end
-
-local function lockChoiceButtons(state: DefaultAdapterState)
-	clearChoiceSelection(state)
-	state.choiceLocked = true
-	state.choose = nil
-	for _, binding in ipairs(state.optionBindings) do
-		binding.button.Active = false
-		binding.button.AutoButtonColor = false
-		binding.button.Selectable = false
+	if label and label:IsA("TextLabel") then
+		label.Text = numbered
 	end
 end
 
 local function activateChoice(state: DefaultAdapterState, index: number)
-	if state.choiceLocked or not state.gui.Enabled then
-		return
-	end
-
 	local binding = state.optionBindings[index]
 	local choose = state.choose
-	if not binding or not choose then
+	if state.choiceLocked or not binding or not choose then
 		return
 	end
 
-	lockChoiceButtons(state)
+	lockOptions(state)
 	choose(index)
 end
 
@@ -619,12 +465,16 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 	then
 		error("MrDialogue.DefaultAdapter.new config.gui must be a ScreenGui", 2)
 	end
-	if config and config.freezeCharacter ~= nil and type(config.freezeCharacter) ~= "boolean" then
-		error("MrDialogue.DefaultAdapter.new config.freezeCharacter must be a boolean", 2)
-	end
 
 	local references = validateGui(resolveGui(explicitGui))
-	local typewriter = TypewriterClass.new(references.dialogueLabel)
+	local freezeCharacter = if config and config.freezeCharacter ~= nil
+		then config.freezeCharacter
+		else true
+
+	-- The dialogue box drops off the bottom of the screen; the options panel slides off the side.
+	local dialoguePosition = references.dialogueFrame.Position
+	local optionsPosition = references.optionsPanel.Position
+
 	local self = setmetatable({}, DefaultAdapter) :: any
 	local state: DefaultAdapterState = {
 		gui = references.gui,
@@ -637,99 +487,115 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		optionsPanel = references.optionsPanel,
 		optionsContainer = references.optionsContainer,
 		optionTemplate = references.optionTemplate,
-		typewriter = typewriter,
+		typewriter = TypewriterClass.new(references.dialogueLabel),
 		typewriterConfig = {
 			charsPerSecond = if config then config.charsPerSecond else nil,
 			punctuationPause = if config then config.punctuationPause else nil,
 		},
-		typewriterConnection = nil,
-		continueConnection = nil,
-		inputConnection = nil,
-		preferredInputConnection = nil,
-		dialogueTween = nil,
-		optionsTween = nil,
-		dialoguePosition = references.dialogueFrame.Position,
-		optionsPosition = references.optionsPanel.Position,
-		defaultFreezeCharacter = if config and config.freezeCharacter ~= nil
-			then config.freezeCharacter
-			else true,
-		freezeCharacter = if config and config.freezeCharacter ~= nil
-			then config.freezeCharacter
-			else true,
-		frozenHumanoid = nil,
-		originalWalkSpeed = nil,
-		originalJumpHeight = nil,
+		connections = {},
+		dialogueSlide = newSlide(
+			references.dialogueFrame,
+			UDim2.new(
+				dialoguePosition.X.Scale,
+				dialoguePosition.X.Offset,
+				2,
+				dialoguePosition.Y.Offset
+			)
+		),
+		optionsSlide = newSlide(
+			references.optionsPanel,
+			UDim2.new(
+				2,
+				optionsPosition.X.Offset,
+				optionsPosition.Y.Scale,
+				optionsPosition.Y.Offset
+			)
+		),
+		defaultFreezeCharacter = freezeCharacter,
+		freezeCharacter = freezeCharacter,
 		continueMode = "DISABLED" :: ContinueMode,
-		continueAction = nil,
-		currentRunId = nil,
-		presentationCompleted = nil,
 		optionBindings = {},
-		choiceGeneration = 0,
 		choiceLocked = true,
-		choose = nil,
 		destroyed = false,
 	}
 	states[self] = state
 
 	state.gui.Enabled = false
-	clearDialogueSelection(state)
 	state.optionsPanel.Visible = false
+	state.optionsContainer.Visible = true
 	state.optionTemplate.Visible = false
 	state.optionTemplate.Active = false
 	state.optionTemplate.Selectable = false
 	state.optionTemplate.AutoButtonColor = false
+	clearDialogueSelection(state)
 	setContinueMode(state, "DISABLED", nil)
-	state.typewriterConnection = typewriter.Completed:Connect(function(runId, outcome)
-		if
-			state.currentRunId ~= runId
-			or outcome == "cancelled"
-			or state.presentationCompleted == nil
-		then
-			return
-		end
 
-		local presentationCompleted = state.presentationCompleted
-		state.currentRunId = nil
-		state.presentationCompleted = nil
-		setContinueMode(state, "DISABLED", nil)
-		presentationCompleted()
-	end)
-	state.continueConnection = state.continueButton.Activated:Connect(function(input)
-		if input.KeyCode == Enum.KeyCode.Space and not state.freezeCharacter then
-			return
-		end
-		activateContinue(state)
-	end)
-	state.inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
-		if
-			gameProcessedEvent
-			or not state.gui.Enabled
-			or UserInputService:GetFocusedTextBox() ~= nil
-		then
-			return
-		end
-
-		local keyCode = input.KeyCode
-		if state.optionsPanel.Visible and not state.choiceLocked then
-			local optionIndex = NUMBER_KEYS[keyCode]
-			if optionIndex then
-				activateChoice(state, optionIndex)
+	table.insert(
+		state.connections,
+		state.typewriter.Completed:Connect(function(runId, outcome)
+			local presentationCompleted = state.presentationCompleted
+			if
+				state.currentRunId ~= runId
+				or outcome == "cancelled"
+				or not presentationCompleted
+			then
+				return
 			end
-			return
-		end
 
-		if
-			(keyCode == Enum.KeyCode.Space and state.freezeCharacter)
-			or keyCode == Enum.KeyCode.Return
-			or keyCode == Enum.KeyCode.KeypadEnter
-		then
+			state.currentRunId = nil
+			state.presentationCompleted = nil
+			setContinueMode(state, "DISABLED", nil)
+			presentationCompleted()
+		end)
+	)
+
+	table.insert(
+		state.connections,
+		state.continueButton.Activated:Connect(function(input)
+			-- Space also jumps, so let it through unless the character is standing still anyway.
+			if input.KeyCode == Enum.KeyCode.Space and not state.freezeCharacter then
+				return
+			end
 			activateContinue(state)
-		end
-	end)
-	state.preferredInputConnection = UserInputService:GetPropertyChangedSignal("PreferredInput")
-		:Connect(function()
+		end)
+	)
+
+	table.insert(
+		state.connections,
+		UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+			if
+				gameProcessedEvent
+				or not state.gui.Enabled
+				or UserInputService:GetFocusedTextBox() ~= nil
+			then
+				return
+			end
+
+			local keyCode = input.KeyCode
+			if state.optionsPanel.Visible and not state.choiceLocked then
+				local optionIndex = NUMBER_KEYS[keyCode]
+				if optionIndex then
+					activateChoice(state, optionIndex)
+				end
+				return
+			end
+
+			if
+				(keyCode == Enum.KeyCode.Space and state.freezeCharacter)
+				or keyCode == Enum.KeyCode.Return
+				or keyCode == Enum.KeyCode.KeypadEnter
+			then
+				activateContinue(state)
+			end
+		end)
+	)
+
+	table.insert(
+		state.connections,
+		UserInputService:GetPropertyChangedSignal("PreferredInput"):Connect(function()
 			updateDialogueSelection(state)
 		end)
+	)
 
 	return table.freeze(self) :: DefaultAdapter
 end
@@ -739,17 +605,18 @@ function DefaultAdapter.OnShow(self: DefaultAdapter, info: ClientRuntimeClass.Sh
 	state.freezeCharacter = if info.freezeCharacter ~= nil
 		then info.freezeCharacter
 		else state.defaultFreezeCharacter
-	clearDialogueSelection(state)
+
 	resetPresentation(state)
 	clearOptions(state)
 	clearSpeaker(state)
+	clearDialogueSelection(state)
 	state.dialogueScroller.CanvasPosition = Vector2.zero
 	state.dialogueLabel.Text = ""
 	state.dialogueLabel.MaxVisibleGraphemes = -1
-	setContinueMode(state, "DISABLED", nil)
+
 	freezeCharacterMovement(state)
 	state.gui.Enabled = true
-	playDialogueTween(state)
+	slideIn(state.dialogueSlide)
 end
 
 function DefaultAdapter.OnPresentation(
@@ -761,11 +628,9 @@ function DefaultAdapter.OnPresentation(
 	resetPresentation(state)
 	clearOptions(state, true)
 	applySpeaker(state, presentation.speaker)
-	state.dialogueFrame.Visible = true
 	state.dialogueScroller.CanvasPosition = Vector2.zero
 
-	local runId = state.typewriter:Play(presentation.text, state.typewriterConfig)
-	state.currentRunId = runId
+	state.currentRunId = state.typewriter:Play(presentation.text, state.typewriterConfig)
 	state.presentationCompleted = actions.presentationCompleted
 	setContinueMode(state, "TYPING", nil)
 end
@@ -792,36 +657,31 @@ function DefaultAdapter.OnChoices(
 	local state = states[self]
 	resetPresentation(state)
 	clearOptions(state)
-	setContinueMode(state, "DISABLED", nil)
 	state.choiceLocked = false
 	state.choose = actions.choose
 	state.optionsContainer.CanvasPosition = Vector2.zero
-	local generation = state.choiceGeneration
 
 	for index, option in ipairs(options) do
 		local button = state.optionTemplate:Clone()
 		button.Name = `Option{index}`
 		button.LayoutOrder = index
+		button.SelectionOrder = index
 		button.Visible = true
 		button.Active = true
 		button.AutoButtonColor = true
 		button.Selectable = true
-		button.SelectionOrder = index
 		setOptionText(button, index, option.text)
 		button.Parent = state.optionsContainer
 
-		local connection = button.Activated:Connect(function()
-			if state.choiceGeneration ~= generation then
-				return
-			end
-			activateChoice(state, index)
-		end)
 		table.insert(state.optionBindings, {
 			button = button,
-			connection = connection,
+			connection = button.Activated:Connect(function()
+				activateChoice(state, index)
+			end),
 		})
 	end
 
+	-- Wrap the gamepad selection around the list so it never dead-ends.
 	local optionCount = #state.optionBindings
 	for index, binding in ipairs(state.optionBindings) do
 		local previousIndex = if index == 1 then optionCount else index - 1
@@ -830,7 +690,7 @@ function DefaultAdapter.OnChoices(
 		binding.button.NextSelectionDown = state.optionBindings[nextIndex].button
 	end
 
-	playOptionsTween(state)
+	slideIn(state.optionsSlide)
 	updateDialogueSelection(state)
 end
 
@@ -840,7 +700,8 @@ function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass
 	resetPresentation(state)
 	clearOptions(state, true)
 	clearDialogueSelection(state)
-	playDialogueExitTween(state, function()
+
+	slideOut(state.dialogueSlide, function()
 		clearSpeaker(state)
 		state.dialogueLabel.Text = ""
 		state.dialogueLabel.MaxVisibleGraphemes = -1
@@ -858,29 +719,17 @@ function DefaultAdapter.Destroy(self: DefaultAdapter): boolean
 	restoreCharacterMovement(state)
 	resetPresentation(state)
 	clearOptions(state)
-	resetDialogueTween(state)
+	resetSlide(state.dialogueSlide)
 	clearDialogueSelection(state)
 	clearSpeaker(state)
 	state.dialogueLabel.Text = ""
 	state.dialogueLabel.MaxVisibleGraphemes = -1
 	state.gui.Enabled = false
 
-	if state.typewriterConnection then
-		state.typewriterConnection:Disconnect()
-		state.typewriterConnection = nil
+	for _, connection in ipairs(state.connections) do
+		connection:Disconnect()
 	end
-	if state.continueConnection then
-		state.continueConnection:Disconnect()
-		state.continueConnection = nil
-	end
-	if state.inputConnection then
-		state.inputConnection:Disconnect()
-		state.inputConnection = nil
-	end
-	if state.preferredInputConnection then
-		state.preferredInputConnection:Disconnect()
-		state.preferredInputConnection = nil
-	end
+	table.clear(state.connections)
 	state.typewriter:Destroy()
 
 	return true

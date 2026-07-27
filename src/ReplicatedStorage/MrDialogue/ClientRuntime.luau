@@ -39,6 +39,11 @@ export type EndOutcome = {
 	authoritative: boolean,
 }
 
+--[[
+	The seam between the runtime and whatever draws the dialogue. Each callback is handed the only
+	actions that make sense at that moment, and each of those is single-use: an adapter cannot
+	advance twice, choose after choosing, or reply to a step the server has moved past.
+]]
 export type Adapter = {
 	OnShow: (self: Adapter, info: ShowInfo) -> (),
 	OnPresentation: (
@@ -101,6 +106,8 @@ local function validateAdapter(adapter: any)
 	end
 end
 
+-- Mirrors the server's turn rule locally so a late callback from a stale UI element is ignored
+-- before it ever reaches the wire. The server checks it again regardless.
 local function isCurrent(
 	state: ClientRuntimeState,
 	sessionId: string,
@@ -117,23 +124,17 @@ local function showPresentation(state: ClientRuntimeState, presentation: Net.Pre
 	end
 
 	local turn = presentation.turn
-
 	state.phase = "WAITING_PRESENTATION"
 	state.turn = turn
 
 	local actions: PresentationActions = {
 		presentationCompleted = function()
-			if
-				state.sessionId ~= sessionId
-				or state.phase ~= "WAITING_PRESENTATION"
-				or state.turn ~= turn
-			then
+			if not isCurrent(state, sessionId, "WAITING_PRESENTATION", turn) then
 				return
 			end
 
 			state.phase = "WAITING_SERVER"
 			state.turn = nil
-
 			Net._sendToServer({
 				type = "presentation_completed",
 				sessionId = sessionId,
@@ -142,13 +143,11 @@ local function showPresentation(state: ClientRuntimeState, presentation: Net.Pre
 		end,
 	}
 
-	local presentationInfo: PresentationInfo = {
+	state.adapter:OnPresentation({
 		kind = presentation.kind,
 		speaker = presentation.speaker,
 		text = presentation.text,
-	}
-
-	state.adapter:OnPresentation(presentationInfo, actions)
+	}, actions)
 end
 
 local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayload)
@@ -159,16 +158,13 @@ local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayloa
 
 	local turn = choices.turn
 	local optionCount = #choices.options
-
 	state.phase = "WAITING_CHOICE"
 	state.turn = turn
 
 	local actions: ChoiceActions = {
 		choose = function(index: number)
 			if
-				state.sessionId ~= sessionId
-				or state.phase ~= "WAITING_CHOICE"
-				or state.turn ~= turn
+				not isCurrent(state, sessionId, "WAITING_CHOICE", turn)
 				or type(index) ~= "number"
 				or index % 1 ~= 0
 				or index < 1
@@ -179,7 +175,6 @@ local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayloa
 
 			state.phase = "WAITING_SERVER"
 			state.turn = nil
-
 			Net._sendToServer({
 				type = "choose",
 				sessionId = sessionId,
@@ -192,6 +187,11 @@ local function showChoices(state: ClientRuntimeState, choices: Net.ChoicesPayloa
 	state.adapter:OnChoices(choices.options, actions)
 end
 
+--[[
+	Advancing and finishing are the same intent on the wire: the server knows from its own state
+	whether the next click continues the conversation or closes it. The client only reports the
+	click, which keeps it from ending a Session the server is not finished with.
+]]
 local function showReady(state: ClientRuntimeState, message: Net.ReadyMessage)
 	local sessionId = state.sessionId
 	if not sessionId or state.phase ~= "WAITING_SERVER" then
@@ -199,50 +199,30 @@ local function showReady(state: ClientRuntimeState, message: Net.ReadyMessage)
 	end
 
 	local turn = message.turn
+	local phase: ClientPhase = if message.interaction == "advance"
+		then "READY_TO_ADVANCE"
+		else "READY_TO_FINISH"
+	state.phase = phase
 	state.turn = turn
 
-	if message.interaction == "advance" then
-		state.phase = "READY_TO_ADVANCE"
+	local function send()
+		if not isCurrent(state, sessionId, phase, turn) then
+			return
+		end
 
-		local actions: AdvanceActions = {
-			advance = function()
-				if not isCurrent(state, sessionId, "READY_TO_ADVANCE", turn) then
-					return
-				end
+		state.phase = "WAITING_SERVER"
+		state.turn = nil
+		Net._sendToServer({
+			type = "advance",
+			sessionId = sessionId,
+			turn = turn,
+		})
+	end
 
-				state.phase = "WAITING_SERVER"
-				state.turn = nil
-
-				Net._sendToServer({
-					type = "advance",
-					sessionId = sessionId,
-					turn = turn,
-				})
-			end,
-		}
-
-		state.adapter:OnAdvanceReady(actions)
+	if phase == "READY_TO_ADVANCE" then
+		state.adapter:OnAdvanceReady({ advance = send })
 	else
-		state.phase = "READY_TO_FINISH"
-
-		local actions: FinishActions = {
-			finish = function()
-				if not isCurrent(state, sessionId, "READY_TO_FINISH", turn) then
-					return
-				end
-
-				state.phase = "WAITING_SERVER"
-				state.turn = nil
-
-				Net._sendToServer({
-					type = "advance",
-					sessionId = sessionId,
-					turn = turn,
-				})
-			end,
-		}
-
-		state.adapter:OnFinishReady(actions)
+		state.adapter:OnFinishReady({ finish = send })
 	end
 end
 
@@ -253,17 +233,13 @@ local function handleStart(state: ClientRuntimeState, message: Net.StartMessage)
 
 	local presentation = message.presentation
 	local choices = message.choices
-
+	-- A start carries exactly one opening payload: a line to read or options to pick from.
 	if (presentation == nil) == (choices == nil) then
-		return
-	end
-	if message.freezeCharacter ~= nil and type(message.freezeCharacter) ~= "boolean" then
 		return
 	end
 
 	state.sessionId = message.sessionId
 	state.cancelSent = false
-
 	state.adapter:OnShow({
 		dialogueId = message.dialogueId,
 		freezeCharacter = message.freezeCharacter,
@@ -277,31 +253,17 @@ local function handleStart(state: ClientRuntimeState, message: Net.StartMessage)
 end
 
 local function handleEnd(state: ClientRuntimeState, message: Net.EndMessage)
-	local outcome: EndOutcome
-	if message.status == "cancelled" then
-		local reason = message.reason
-		if type(reason) ~= "string" or reason == "" then
-			return
-		end
-		outcome = {
-			status = "cancelled",
-			reason = reason,
-			authoritative = true,
-		}
-	else
-		outcome = {
-			status = "completed",
-			result = message.result,
-			authoritative = true,
-		}
-	end
-
 	state.phase = "IDLE"
 	state.sessionId = nil
 	state.turn = nil
 	state.cancelSent = false
 
-	state.adapter:OnEnd(outcome)
+	state.adapter:OnEnd({
+		status = message.status,
+		result = message.result,
+		reason = message.reason,
+		authoritative = true,
+	})
 end
 
 local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessage)
@@ -313,6 +275,8 @@ local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessa
 	if state.sessionId == nil or message.sessionId ~= state.sessionId then
 		return
 	end
+
+	-- Once a cancel is on its way, the only message still worth acting on is the ending itself.
 	if state.cancelSent then
 		if message.type == "end" then
 			handleEnd(state, message)
@@ -321,25 +285,21 @@ local function handleMessage(state: ClientRuntimeState, message: Net.ServerMessa
 	end
 
 	if message.type == "present" then
-		if state.phase ~= "WAITING_SERVER" then
-			return
+		if state.phase == "WAITING_SERVER" then
+			showPresentation(state, {
+				turn = message.turn,
+				kind = message.kind,
+				speaker = message.speaker,
+				text = message.text,
+			})
 		end
-
-		showPresentation(state, {
-			turn = message.turn,
-			kind = message.kind,
-			speaker = message.speaker,
-			text = message.text,
-		})
 	elseif message.type == "choices" then
-		if state.phase ~= "WAITING_SERVER" then
-			return
+		if state.phase == "WAITING_SERVER" then
+			showChoices(state, {
+				turn = message.turn,
+				options = message.options,
+			})
 		end
-
-		showChoices(state, {
-			turn = message.turn,
-			options = message.options,
-		})
 	elseif message.type == "ready" then
 		showReady(state, message)
 	elseif message.type == "end" then
@@ -351,17 +311,12 @@ function ClientRuntime.new(adapter: any): ClientRuntime
 	validateAdapter(adapter)
 
 	local self = setmetatable({}, ClientRuntime) :: any
-
 	local state: ClientRuntimeState = {
 		adapter = adapter,
-		connection = nil,
 		phase = "IDLE",
-		sessionId = nil,
-		turn = nil,
 		cancelSent = false,
 		stopped = false,
 	}
-
 	states[self] = state
 
 	state.connection = Net._connectClient(function(message: Net.ServerMessage)
@@ -375,37 +330,28 @@ end
 
 function ClientRuntime.IsActive(self: ClientRuntime): boolean
 	local state = states[self]
-
 	return state ~= nil and not state.stopped and state.sessionId ~= nil
 end
 
+-- Locks input straight away but leaves the outcome to the server, which still sends the ending.
 function ClientRuntime._cancelActiveSession(self: ClientRuntime): boolean
 	local state = states[self]
-	if not state or state.stopped or state.sessionId == nil or state.cancelSent then
+	if not state or state.stopped or state.cancelSent then
 		return false
 	end
 
 	local sessionId = state.sessionId
-	local previousPhase: ClientPhase = state.phase
-	local previousTurn: string? = state.turn
+	if not sessionId then
+		return false
+	end
+
 	state.phase = "WAITING_SERVER"
 	state.turn = nil
 	state.cancelSent = true
-
-	local sent, sendError = pcall(function()
-		Net._sendToServer({
-			type = "cancel",
-			sessionId = sessionId,
-		})
-	end)
-	if not sent then
-		if state.sessionId == sessionId and not state.stopped then
-			state.phase = previousPhase
-			state.turn = previousTurn
-			state.cancelSent = false
-		end
-		error(sendError, 2)
-	end
+	Net._sendToServer({
+		type = "cancel",
+		sessionId = sessionId,
+	})
 
 	return true
 end
@@ -427,25 +373,21 @@ function ClientRuntime._stop(self: ClientRuntime): boolean
 	state.cancelSent = true
 
 	if shouldSendCancel and sessionId then
-		local sent, sendError = pcall(function()
-			Net._sendToServer({
-				type = "cancel",
-				sessionId = sessionId,
-			})
-		end)
-		if not sent then
-			warn(`[MrDialogue][CLIENT_CANCEL_SEND_FAILED] {tostring(sendError)}`)
-		end
+		Net._sendToServer({
+			type = "cancel",
+			sessionId = sessionId,
+		})
 	end
 
 	if sessionId then
-		local outcome: EndOutcome = {
-			status = "cancelled",
-			reason = "client_shutdown",
-			authoritative = false,
-		}
+		-- Local teardown cannot wait for the server's answer, so this ending is flagged as the
+		-- guess it is; the server still closes the Session on its own terms.
 		local cleaned, cleanupError = pcall(function()
-			state.adapter:OnEnd(outcome)
+			state.adapter:OnEnd({
+				status = "cancelled",
+				reason = "client_shutdown",
+				authoritative = false,
+			})
 		end)
 		if not cleaned then
 			warn(`[MrDialogue][ADAPTER_END_FAILED] {tostring(cleanupError)}`)

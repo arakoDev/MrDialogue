@@ -28,6 +28,15 @@ function Conditions._isRegistered(name: string): boolean
 	return handlers[name] ~= nil
 end
 
+--[[
+	Conditions gate options and branches, so a broken one must never open something it was meant to
+	keep shut: anything other than a plain `true` — a throw, a yield, a non-boolean — is reported and
+	treated as false.
+
+	They also run repeatedly (filtering an offer, re-checking an accepted choice, re-offering after a
+	refresh), which is why handlers must stay cheap, synchronous, and free of side effects. Running
+	them on a coroutine is how a yield is caught rather than silently stalling the conversation.
+]]
 function Conditions._evaluate(spec: Types.ConditionSpec, context: Types.DialogueContext): boolean
 	local handler = handlers[spec.name]
 	if not handler then

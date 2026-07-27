@@ -30,6 +30,11 @@ function Actions._isRegistered(name: string): boolean
 	return handlers[name] ~= nil
 end
 
+--[[
+	Runs a handler on a coroutine so a yield can be caught instead of stalling the conversation
+	mid-node. Returning nothing or `true` is success; `false, details` is an authored failure the
+	dialogue can react to; anything else is a mistake in the handler.
+]]
 function Actions._execute(spec: Types.ActionSpec, context: Types.DialogueContext): ExecutionResult
 	local handler = handlers[spec.name]
 	if not handler then

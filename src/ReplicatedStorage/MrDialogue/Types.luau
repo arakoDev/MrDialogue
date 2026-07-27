@@ -100,6 +100,7 @@ export type DialogueDefinition = {
 	defaultSpeaker: string?,
 	defaultIcon: string?,
 	freezeCharacter: boolean?,
+	endDialogueOnDeath: boolean?,
 }
 
 return {}
