@@ -45,6 +45,7 @@ type DefaultAdapterState = GuiReferences & {
 	typewriterConnection: RBXScriptConnection?,
 	continueConnection: RBXScriptConnection?,
 	inputConnection: RBXScriptConnection?,
+	preferredInputConnection: RBXScriptConnection?,
 	continueMode: ContinueMode,
 	continueAction: (() -> ())?,
 	currentRunId: number?,
@@ -222,18 +223,40 @@ local function clearDialogueSelection(state: DefaultAdapterState)
 	end
 end
 
+local function updateDialogueSelection(state: DefaultAdapterState)
+	if not state.gui.Enabled or UserInputService.PreferredInput ~= Enum.PreferredInput.Gamepad then
+		clearDialogueSelection(state)
+		return
+	end
+
+	if state.optionsFrame.Visible and not state.choiceLocked then
+		local selectedObject = GuiService.SelectedObject
+		for _, binding in ipairs(state.optionBindings) do
+			if selectedObject == binding.button then
+				return
+			end
+		end
+
+		local firstBinding = state.optionBindings[1]
+		if firstBinding then
+			GuiService.SelectedObject = firstBinding.button
+		end
+		return
+	end
+
+	if not state.optionsFrame.Visible and state.continueMode ~= "DISABLED" then
+		GuiService.SelectedObject = state.continueButton
+		return
+	end
+
+	clearDialogueSelection(state)
+end
+
 local function setContinueMode(state: DefaultAdapterState, mode: ContinueMode, action: (() -> ())?)
 	state.continueMode = mode
 	state.continueAction = action
 	setContinueEnabled(state, mode ~= "DISABLED")
-
-	if mode == "DISABLED" then
-		if GuiService.SelectedObject == state.continueButton then
-			GuiService.SelectedObject = nil
-		end
-	elseif not state.optionsFrame.Visible then
-		GuiService.SelectedObject = state.continueButton
-	end
+	updateDialogueSelection(state)
 end
 
 local function activateContinue(state: DefaultAdapterState)
@@ -379,6 +402,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		typewriterConnection = nil,
 		continueConnection = nil,
 		inputConnection = nil,
+		preferredInputConnection = nil,
 		continueMode = "DISABLED" :: ContinueMode,
 		continueAction = nil,
 		currentRunId = nil,
@@ -443,6 +467,10 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 			activateContinue(state)
 		end
 	end)
+	state.preferredInputConnection = UserInputService:GetPropertyChangedSignal("PreferredInput")
+		:Connect(function()
+			updateDialogueSelection(state)
+		end)
 
 	return table.freeze(self) :: DefaultAdapter
 end
@@ -537,10 +565,7 @@ function DefaultAdapter.OnChoices(
 		binding.button.NextSelectionDown = state.optionBindings[nextIndex].button
 	end
 
-	local firstBinding = state.optionBindings[1]
-	if firstBinding then
-		GuiService.SelectedObject = firstBinding.button
-	end
+	updateDialogueSelection(state)
 end
 
 function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass.EndOutcome)
@@ -581,6 +606,10 @@ function DefaultAdapter.Destroy(self: DefaultAdapter): boolean
 	if state.inputConnection then
 		state.inputConnection:Disconnect()
 		state.inputConnection = nil
+	end
+	if state.preferredInputConnection then
+		state.preferredInputConnection:Disconnect()
+		state.preferredInputConnection = nil
 	end
 	state.typewriter:Destroy()
 
