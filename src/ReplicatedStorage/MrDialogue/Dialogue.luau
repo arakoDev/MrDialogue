@@ -168,21 +168,18 @@ local function validatePresentation(nodeKind: string, nodeId: string, node: any,
 
 		local emotions = speaker.emotions
 		local emotionIcon = if type(emotions) == "table" then emotions[node.emotion] else nil
-		if type(emotionIcon) ~= "string" or emotionIcon == "" then
+		if type(emotionIcon) ~= "string" then
 			error(
 				`MrDialogue.new: {nodeKind} node "{nodeId}" references unknown emotion "{node.emotion}"`,
 				4
 			)
 		end
 	elseif speaker.icon ~= nil then
-		if type(speaker.icon) ~= "string" or speaker.icon == "" then
-			error(`MrDialogue.new: speaker "{speakerId}" icon must be a non-empty string`, 4)
+		if type(speaker.icon) ~= "string" then
+			error(`MrDialogue.new: speaker "{speakerId}" icon must be a string`, 4)
 		end
-	elseif
-		definition.defaultIcon ~= nil
-		and (type(definition.defaultIcon) ~= "string" or definition.defaultIcon == "")
-	then
-		error("MrDialogue.new: definition.defaultIcon must be a non-empty string", 4)
+	elseif definition.defaultIcon ~= nil and type(definition.defaultIcon) ~= "string" then
+		error("MrDialogue.new: definition.defaultIcon must be a string", 4)
 	end
 end
 
@@ -382,6 +379,10 @@ function Dialogue.new(definition: any): Dialogue
 
 	assertNonEmptyString(definition.id, "definition.id")
 	assertNonEmptyString(definition.entry, "definition.entry")
+
+	if definition.freezeCharacter ~= nil and type(definition.freezeCharacter) ~= "boolean" then
+		error("MrDialogue.new: definition.freezeCharacter must be a boolean", 3)
+	end
 
 	if type(definition.nodes) ~= "table" then
 		error("MrDialogue.new: definition.nodes must be a table", 3)

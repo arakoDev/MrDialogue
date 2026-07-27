@@ -33,6 +33,7 @@ export type StartMessage = {
 	type: "start",
 	sessionId: string,
 	dialogueId: string,
+	freezeCharacter: boolean?,
 	presentation: PresentationPayload?,
 	choices: ChoicesPayload?,
 }

@@ -83,7 +83,7 @@ local function resolveSpeaker(
 	if node.emotion ~= nil then
 		local emotions = speaker.emotions
 		icon = if emotions then emotions[node.emotion] else nil
-		if not icon then
+		if type(icon) ~= "string" then
 			error(
 				`presentation references unknown emotion "{node.emotion}" for speaker "{speakerId}"`,
 				3
@@ -93,9 +93,14 @@ local function resolveSpeaker(
 		icon = speaker.icon
 	end
 
+	local resolvedIcon = icon or speaker.icon or definition.defaultIcon
+	if resolvedIcon == "" then
+		resolvedIcon = nil
+	end
+
 	return {
 		name = speaker.name,
-		icon = icon or speaker.icon or definition.defaultIcon,
+		icon = resolvedIcon,
 	}
 end
 
@@ -537,6 +542,7 @@ function Session.new(
 		type = "start",
 		sessionId = sessionId,
 		dialogueId = dialogueId,
+		freezeCharacter = definition.freezeCharacter,
 		presentation = prepared.presentation,
 		choices = prepared.choices,
 	}

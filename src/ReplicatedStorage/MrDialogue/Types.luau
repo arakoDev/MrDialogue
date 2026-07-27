@@ -99,6 +99,7 @@ export type DialogueDefinition = {
 	speakers: { [string]: SpeakerDefinition }?,
 	defaultSpeaker: string?,
 	defaultIcon: string?,
+	freezeCharacter: boolean?,
 }
 
 return {}

@@ -13,6 +13,7 @@ local TypewriterClass = require(script.Parent.Typewriter)
 export type Adapter = ClientRuntimeClass.Adapter
 export type ClientRuntime = ClientRuntimeClass.ClientRuntime
 export type EndOutcome = ClientRuntimeClass.EndOutcome
+export type ShowInfo = ClientRuntimeClass.ShowInfo
 export type DefaultAdapter = DefaultAdapterClass.DefaultAdapter
 export type DefaultAdapterConfig = DefaultAdapterClass.Config
 export type Typewriter = TypewriterClass.Typewriter

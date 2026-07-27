@@ -54,6 +54,7 @@ type DefaultAdapterState = GuiReferences & {
 	optionsTween: Tween?,
 	dialoguePosition: UDim2,
 	optionsPosition: UDim2,
+	defaultFreezeCharacter: boolean,
 	freezeCharacter: boolean,
 	frozenHumanoid: Humanoid?,
 	originalWalkSpeed: number?,
@@ -493,8 +494,12 @@ local function applySpeaker(state: DefaultAdapterState, speaker: Net.SpeakerPayl
 
 	state.npcName.Text = speaker.name
 	state.npcName.Visible = true
-	if speaker.icon and speaker.icon ~= "" then
-		state.npcIcon.Image = speaker.icon
+	local icon = speaker.icon
+	if icon == nil or icon == "" then
+		state.npcIcon.Image = ""
+		state.npcIcon.Visible = false
+	else
+		state.npcIcon.Image = icon
 		state.npcIcon.Visible = true
 	end
 end
@@ -645,6 +650,9 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		optionsTween = nil,
 		dialoguePosition = references.dialogueFrame.Position,
 		optionsPosition = references.optionsPanel.Position,
+		defaultFreezeCharacter = if config and config.freezeCharacter ~= nil
+			then config.freezeCharacter
+			else true,
 		freezeCharacter = if config and config.freezeCharacter ~= nil
 			then config.freezeCharacter
 			else true,
@@ -726,8 +734,11 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 	return table.freeze(self) :: DefaultAdapter
 end
 
-function DefaultAdapter.OnShow(self: DefaultAdapter, _info: { dialogueId: string })
+function DefaultAdapter.OnShow(self: DefaultAdapter, info: ClientRuntimeClass.ShowInfo)
 	local state = states[self]
+	state.freezeCharacter = if info.freezeCharacter ~= nil
+		then info.freezeCharacter
+		else state.defaultFreezeCharacter
 	clearDialogueSelection(state)
 	resetPresentation(state)
 	clearOptions(state)

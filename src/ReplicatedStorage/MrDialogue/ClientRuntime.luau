@@ -21,6 +21,11 @@ export type ChoiceActions = {
 	choose: (index: number) -> (),
 }
 
+export type ShowInfo = {
+	dialogueId: string,
+	freezeCharacter: boolean?,
+}
+
 export type PresentationInfo = {
 	kind: "line" | "choice_prompt",
 	speaker: Net.SpeakerPayload?,
@@ -35,7 +40,7 @@ export type EndOutcome = {
 }
 
 export type Adapter = {
-	OnShow: (self: Adapter, info: { dialogueId: string }) -> (),
+	OnShow: (self: Adapter, info: ShowInfo) -> (),
 	OnPresentation: (
 		self: Adapter,
 		presentation: PresentationInfo,
@@ -252,12 +257,16 @@ local function handleStart(state: ClientRuntimeState, message: Net.StartMessage)
 	if (presentation == nil) == (choices == nil) then
 		return
 	end
+	if message.freezeCharacter ~= nil and type(message.freezeCharacter) ~= "boolean" then
+		return
+	end
 
 	state.sessionId = message.sessionId
 	state.cancelSent = false
 
 	state.adapter:OnShow({
 		dialogueId = message.dialogueId,
+		freezeCharacter = message.freezeCharacter,
 	})
 
 	if presentation then
