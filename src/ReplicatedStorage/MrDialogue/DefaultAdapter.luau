@@ -2,6 +2,7 @@
 
 local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local ClientRuntimeClass = require(script.Parent.ClientRuntime)
@@ -46,6 +47,10 @@ type DefaultAdapterState = GuiReferences & {
 	continueConnection: RBXScriptConnection?,
 	inputConnection: RBXScriptConnection?,
 	preferredInputConnection: RBXScriptConnection?,
+	npcDialogueTween: Tween?,
+	optionsTween: Tween?,
+	npcDialoguePosition: UDim2,
+	optionsPosition: UDim2,
 	continueMode: ContinueMode,
 	continueAction: (() -> ())?,
 	currentRunId: number?,
@@ -70,6 +75,9 @@ local NUMBER_KEYS: { [Enum.KeyCode]: number } = {
 	[Enum.KeyCode.Eight] = 8,
 	[Enum.KeyCode.Nine] = 9,
 }
+
+local APPEAR_TWEEN_INFO = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+local DISAPPEAR_TWEEN_INFO = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
 
 local function getPlayerGui(): PlayerGui
 	local player = Players.LocalPlayer
@@ -216,6 +224,134 @@ local function setContinueEnabled(state: DefaultAdapterState, enabled: boolean)
 	state.continueButton.Selectable = enabled
 end
 
+local function cancelNpcDialogueTween(state: DefaultAdapterState)
+	local tween = state.npcDialogueTween
+	state.npcDialogueTween = nil
+	if tween then
+		tween:Cancel()
+	end
+end
+
+local function resetNpcDialogueTween(state: DefaultAdapterState)
+	cancelNpcDialogueTween(state)
+	state.npcDialogueFrame.Position = state.npcDialoguePosition
+end
+
+local function getNpcDialogueHiddenPosition(state: DefaultAdapterState): UDim2
+	local originalPosition = state.npcDialoguePosition
+	return UDim2.new(
+		originalPosition.X.Scale,
+		originalPosition.X.Offset,
+		2,
+		originalPosition.Y.Offset
+	)
+end
+
+local function playNpcDialogueTween(state: DefaultAdapterState)
+	resetNpcDialogueTween(state)
+	local originalPosition = state.npcDialoguePosition
+	state.npcDialogueFrame.Position = getNpcDialogueHiddenPosition(state)
+	state.npcDialogueFrame.Visible = true
+
+	local tween = TweenService:Create(
+		state.npcDialogueFrame,
+		APPEAR_TWEEN_INFO,
+		{ Position = originalPosition }
+	)
+	state.npcDialogueTween = tween
+	tween:Play()
+end
+
+local function playNpcDialogueExitTween(state: DefaultAdapterState, completed: () -> ())
+	cancelNpcDialogueTween(state)
+	if not state.gui.Enabled or not state.npcDialogueFrame.Visible then
+		state.npcDialogueFrame.Position = state.npcDialoguePosition
+		state.npcDialogueFrame.Visible = false
+		completed()
+		return
+	end
+
+	local tween = TweenService:Create(
+		state.npcDialogueFrame,
+		DISAPPEAR_TWEEN_INFO,
+		{ Position = getNpcDialogueHiddenPosition(state) }
+	)
+	state.npcDialogueTween = tween
+	tween.Completed:Once(function(playbackState)
+		if state.npcDialogueTween ~= tween or playbackState ~= Enum.PlaybackState.Completed then
+			return
+		end
+
+		state.npcDialogueTween = nil
+		state.npcDialogueFrame.Visible = false
+		state.npcDialogueFrame.Position = state.npcDialoguePosition
+		completed()
+	end)
+	tween:Play()
+end
+
+local function cancelOptionsTween(state: DefaultAdapterState)
+	local tween = state.optionsTween
+	state.optionsTween = nil
+	if tween then
+		tween:Cancel()
+	end
+end
+
+local function resetOptionsTween(state: DefaultAdapterState)
+	cancelOptionsTween(state)
+	state.optionsFrame.Position = state.optionsPosition
+end
+
+local function getOptionsHiddenPosition(state: DefaultAdapterState): UDim2
+	local originalPosition = state.optionsPosition
+	return UDim2.new(
+		2,
+		originalPosition.X.Offset,
+		originalPosition.Y.Scale,
+		originalPosition.Y.Offset
+	)
+end
+
+local function playOptionsTween(state: DefaultAdapterState)
+	resetOptionsTween(state)
+	local originalPosition = state.optionsPosition
+	state.optionsFrame.Position = getOptionsHiddenPosition(state)
+	state.optionsFrame.Visible = true
+
+	local tween =
+		TweenService:Create(state.optionsFrame, APPEAR_TWEEN_INFO, { Position = originalPosition })
+	state.optionsTween = tween
+	tween:Play()
+end
+
+local function playOptionsExitTween(state: DefaultAdapterState, completed: () -> ())
+	cancelOptionsTween(state)
+	if not state.optionsFrame.Visible then
+		state.optionsFrame.Position = state.optionsPosition
+		completed()
+		return
+	end
+
+	local tween = TweenService:Create(
+		state.optionsFrame,
+		DISAPPEAR_TWEEN_INFO,
+		{ Position = getOptionsHiddenPosition(state) }
+	)
+	state.optionsTween = tween
+	tween.Completed:Once(function(playbackState)
+		if state.optionsTween ~= tween or playbackState ~= Enum.PlaybackState.Completed then
+			return
+		end
+
+		state.optionsTween = nil
+		state.optionsFrame.Visible = false
+		state.optionsFrame.Position = state.optionsPosition
+		completed()
+	end)
+	tween:Play()
+end
+
 local function clearDialogueSelection(state: DefaultAdapterState)
 	local selectedObject = GuiService.SelectedObject
 	if selectedObject and selectedObject:IsDescendantOf(state.gui) then
@@ -244,7 +380,10 @@ local function updateDialogueSelection(state: DefaultAdapterState)
 		return
 	end
 
-	if not state.optionsFrame.Visible and state.continueMode ~= "DISABLED" then
+	if
+		(not state.optionsFrame.Visible or state.choiceLocked)
+		and state.continueMode ~= "DISABLED"
+	then
 		GuiService.SelectedObject = state.continueButton
 		return
 	end
@@ -260,7 +399,11 @@ local function setContinueMode(state: DefaultAdapterState, mode: ContinueMode, a
 end
 
 local function activateContinue(state: DefaultAdapterState)
-	if not state.gui.Enabled or state.optionsFrame.Visible or state.continueMode == "DISABLED" then
+	if
+		not state.gui.Enabled
+		or (state.optionsFrame.Visible and not state.choiceLocked)
+		or state.continueMode == "DISABLED"
+	then
 		return
 	end
 
@@ -310,22 +453,52 @@ local function clearChoiceSelection(state: DefaultAdapterState)
 	end
 end
 
-local function clearOptions(state: DefaultAdapterState)
+local function destroyOptionBindings(state: DefaultAdapterState)
+	for _, binding in ipairs(state.optionBindings) do
+		binding.connection:Disconnect()
+		binding.button:Destroy()
+	end
+	table.clear(state.optionBindings)
+end
+
+local function clearOptions(state: DefaultAdapterState, animate: boolean?)
 	clearChoiceSelection(state)
 	state.choiceGeneration += 1
 	state.choiceLocked = true
 	state.choose = nil
 	for _, binding in ipairs(state.optionBindings) do
 		binding.connection:Disconnect()
-		binding.button:Destroy()
+		binding.button.Active = false
+		binding.button.AutoButtonColor = false
+		binding.button.Selectable = false
 	end
-	table.clear(state.optionBindings)
-	state.optionsFrame.Visible = false
+
+	if animate and state.optionsFrame.Visible then
+		playOptionsExitTween(state, function()
+			destroyOptionBindings(state)
+			updateDialogueSelection(state)
+		end)
+	else
+		resetOptionsTween(state)
+		destroyOptionBindings(state)
+		state.optionsFrame.Visible = false
+	end
 end
 
-local function setOptionText(button: GuiButton, text: string)
+local function formatOptionText(index: number, text: string): string
+	local expectedPrefix = `{index}.`
+	if string.sub(text, 1, #expectedPrefix) == expectedPrefix then
+		return text
+	end
+
+	local content = string.gsub(text, "^%s*%d+%.%s*", "", 1)
+	return `{expectedPrefix} {content}`
+end
+
+local function setOptionText(button: GuiButton, index: number, text: string)
+	local formattedText = formatOptionText(index, text)
 	if button:IsA("TextButton") then
-		button.Text = text
+		button.Text = formattedText
 		return
 	end
 
@@ -333,7 +506,7 @@ local function setOptionText(button: GuiButton, text: string)
 	if not label or not label:IsA("TextLabel") then
 		error("OptionTemplate ImageButton requires a TextLabel child", 2)
 	end
-	label.Text = text
+	label.Text = formattedText
 end
 
 local function lockChoiceButtons(state: DefaultAdapterState)
@@ -403,6 +576,10 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		continueConnection = nil,
 		inputConnection = nil,
 		preferredInputConnection = nil,
+		npcDialogueTween = nil,
+		optionsTween = nil,
+		npcDialoguePosition = references.npcDialogueFrame.Position,
+		optionsPosition = references.optionsFrame.Position,
 		continueMode = "DISABLED" :: ContinueMode,
 		continueAction = nil,
 		currentRunId = nil,
@@ -451,7 +628,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		end
 
 		local keyCode = input.KeyCode
-		if state.optionsFrame.Visible then
+		if state.optionsFrame.Visible and not state.choiceLocked then
 			local optionIndex = NUMBER_KEYS[keyCode]
 			if optionIndex then
 				activateChoice(state, optionIndex)
@@ -483,9 +660,9 @@ function DefaultAdapter.OnShow(self: DefaultAdapter, _info: { dialogueId: string
 	clearSpeaker(state)
 	state.dialogueLabel.Text = ""
 	state.dialogueLabel.MaxVisibleGraphemes = -1
-	state.npcDialogueFrame.Visible = true
 	setContinueMode(state, "DISABLED", nil)
 	state.gui.Enabled = true
+	playNpcDialogueTween(state)
 end
 
 function DefaultAdapter.OnPresentation(
@@ -495,7 +672,7 @@ function DefaultAdapter.OnPresentation(
 )
 	local state = states[self]
 	resetPresentation(state)
-	clearOptions(state)
+	clearOptions(state, true)
 	applySpeaker(state, presentation.speaker)
 	state.npcDialogueFrame.Visible = true
 
@@ -541,7 +718,7 @@ function DefaultAdapter.OnChoices(
 		button.AutoButtonColor = true
 		button.Selectable = true
 		button.SelectionOrder = index
-		setOptionText(button, option.text)
+		setOptionText(button, index, option.text)
 		button.Parent = state.optionsFrame
 
 		local connection = button.Activated:Connect(function()
@@ -556,7 +733,6 @@ function DefaultAdapter.OnChoices(
 		})
 	end
 
-	state.optionsFrame.Visible = true
 	local optionCount = #state.optionBindings
 	for index, binding in ipairs(state.optionBindings) do
 		local previousIndex = if index == 1 then optionCount else index - 1
@@ -565,19 +741,21 @@ function DefaultAdapter.OnChoices(
 		binding.button.NextSelectionDown = state.optionBindings[nextIndex].button
 	end
 
+	playOptionsTween(state)
 	updateDialogueSelection(state)
 end
 
 function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass.EndOutcome)
 	local state = states[self]
 	resetPresentation(state)
-	clearOptions(state)
+	clearOptions(state, true)
 	clearDialogueSelection(state)
-	clearSpeaker(state)
-	state.dialogueLabel.Text = ""
-	state.dialogueLabel.MaxVisibleGraphemes = -1
-	setContinueMode(state, "DISABLED", nil)
-	state.gui.Enabled = false
+	playNpcDialogueExitTween(state, function()
+		clearSpeaker(state)
+		state.dialogueLabel.Text = ""
+		state.dialogueLabel.MaxVisibleGraphemes = -1
+		state.gui.Enabled = false
+	end)
 end
 
 function DefaultAdapter.Destroy(self: DefaultAdapter): boolean
@@ -589,6 +767,7 @@ function DefaultAdapter.Destroy(self: DefaultAdapter): boolean
 	state.destroyed = true
 	resetPresentation(state)
 	clearOptions(state)
+	resetNpcDialogueTween(state)
 	clearDialogueSelection(state)
 	clearSpeaker(state)
 	state.dialogueLabel.Text = ""
