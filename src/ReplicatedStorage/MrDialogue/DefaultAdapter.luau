@@ -16,6 +16,7 @@ export type Config = {
 	gui: ScreenGui?,
 	charsPerSecond: number?,
 	punctuationPause: number?,
+	freezeCharacter: boolean?,
 }
 
 export type DefaultAdapter = ClientRuntimeClass.Adapter & {
@@ -51,6 +52,10 @@ type DefaultAdapterState = GuiReferences & {
 	optionsTween: Tween?,
 	npcDialoguePosition: UDim2,
 	optionsPosition: UDim2,
+	freezeCharacter: boolean,
+	frozenHumanoid: Humanoid?,
+	originalWalkSpeed: number?,
+	originalJumpHeight: number?,
 	continueMode: ContinueMode,
 	continueAction: (() -> ())?,
 	currentRunId: number?,
@@ -222,6 +227,45 @@ local function setContinueEnabled(state: DefaultAdapterState, enabled: boolean)
 	state.continueButton.Active = enabled
 	state.continueButton.AutoButtonColor = enabled
 	state.continueButton.Selectable = enabled
+end
+
+local function restoreCharacterMovement(state: DefaultAdapterState)
+	local humanoid = state.frozenHumanoid
+	local originalWalkSpeed = state.originalWalkSpeed
+	local originalJumpHeight = state.originalJumpHeight
+
+	state.frozenHumanoid = nil
+	state.originalWalkSpeed = nil
+	state.originalJumpHeight = nil
+
+	if humanoid and humanoid.Parent then
+		if originalWalkSpeed then
+			humanoid.WalkSpeed = originalWalkSpeed
+		end
+		if originalJumpHeight then
+			humanoid.JumpHeight = originalJumpHeight
+		end
+	end
+end
+
+local function freezeCharacterMovement(state: DefaultAdapterState)
+	restoreCharacterMovement(state)
+	if not state.freezeCharacter then
+		return
+	end
+
+	local player = Players.LocalPlayer
+	local character = if player then player.Character else nil
+	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
+	if not humanoid then
+		return
+	end
+
+	state.frozenHumanoid = humanoid
+	state.originalWalkSpeed = humanoid.WalkSpeed
+	state.originalJumpHeight = humanoid.JumpHeight
+	humanoid.WalkSpeed = 0
+	humanoid.JumpHeight = 0
 end
 
 local function cancelNpcDialogueTween(state: DefaultAdapterState)
@@ -554,6 +598,9 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 	then
 		error("MrDialogue.DefaultAdapter.new config.gui must be a ScreenGui", 2)
 	end
+	if config and config.freezeCharacter ~= nil and type(config.freezeCharacter) ~= "boolean" then
+		error("MrDialogue.DefaultAdapter.new config.freezeCharacter must be a boolean", 2)
+	end
 
 	local references = validateGui(resolveGui(explicitGui))
 	local typewriter = TypewriterClass.new(references.dialogueLabel)
@@ -580,6 +627,12 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		optionsTween = nil,
 		npcDialoguePosition = references.npcDialogueFrame.Position,
 		optionsPosition = references.optionsFrame.Position,
+		freezeCharacter = if config and config.freezeCharacter ~= nil
+			then config.freezeCharacter
+			else true,
+		frozenHumanoid = nil,
+		originalWalkSpeed = nil,
+		originalJumpHeight = nil,
 		continueMode = "DISABLED" :: ContinueMode,
 		continueAction = nil,
 		currentRunId = nil,
@@ -615,7 +668,10 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		setContinueMode(state, "DISABLED", nil)
 		presentationCompleted()
 	end)
-	state.continueConnection = state.continueButton.Activated:Connect(function()
+	state.continueConnection = state.continueButton.Activated:Connect(function(input)
+		if input.KeyCode == Enum.KeyCode.Space and not state.freezeCharacter then
+			return
+		end
 		activateContinue(state)
 	end)
 	state.inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
@@ -637,7 +693,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		end
 
 		if
-			keyCode == Enum.KeyCode.Space
+			(keyCode == Enum.KeyCode.Space and state.freezeCharacter)
 			or keyCode == Enum.KeyCode.Return
 			or keyCode == Enum.KeyCode.KeypadEnter
 		then
@@ -661,6 +717,7 @@ function DefaultAdapter.OnShow(self: DefaultAdapter, _info: { dialogueId: string
 	state.dialogueLabel.Text = ""
 	state.dialogueLabel.MaxVisibleGraphemes = -1
 	setContinueMode(state, "DISABLED", nil)
+	freezeCharacterMovement(state)
 	state.gui.Enabled = true
 	playNpcDialogueTween(state)
 end
@@ -747,6 +804,7 @@ end
 
 function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass.EndOutcome)
 	local state = states[self]
+	restoreCharacterMovement(state)
 	resetPresentation(state)
 	clearOptions(state, true)
 	clearDialogueSelection(state)
@@ -765,6 +823,7 @@ function DefaultAdapter.Destroy(self: DefaultAdapter): boolean
 	end
 
 	state.destroyed = true
+	restoreCharacterMovement(state)
 	resetPresentation(state)
 	clearOptions(state)
 	resetNpcDialogueTween(state)
