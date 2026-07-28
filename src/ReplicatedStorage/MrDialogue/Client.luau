@@ -26,7 +26,6 @@ export type StartConfig = {
 
 local Client = {}
 local runtime: ClientRuntime? = nil
--- Caller-supplied adapters remain caller-owned.
 local ownedDefaultAdapter: DefaultAdapter? = nil
 
 Client.DefaultAdapter = DefaultAdapterClass

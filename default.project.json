@@ -1,12 +1,6 @@
 {
   "name": "MrDialogue",
   "tree": {
-    "$className": "DataModel",
-
-    "ReplicatedStorage": {
-      "Source": {
-        "$path": "src/ReplicatedStorage"
-      }
-    }
+    "$path": "src/ReplicatedStorage/MrDialogue"
   }
 }

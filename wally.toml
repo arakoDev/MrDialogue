@@ -1,7 +1,28 @@
 [package]
 name = "arakodev/mrdialogue"
+description = "Graph-based dialogue runtime for Roblox with branching, conditions, actions, sessions, and replaceable UI."
 version = "0.1.0"
+license = "MIT"
+authors = ["arakoDev"]
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
+repository = "https://github.com/arakoDev/MrDialogue"
+include = [
+	"default.project.json",
+	"src",
+	"README.md",
+	"LICENSE",
+	"wally.toml",
+]
+# Wally 0.3.2 re-includes matching paths but does not filter every non-matching path.
+# Keep development-only files excluded explicitly.
+exclude = [
+	"dev.project.json",
+	"docs",
+	"rokit.toml",
+	"selene.toml",
+	"sourcemap.json",
+	"stylua.toml",
+]
 
 [dependencies]

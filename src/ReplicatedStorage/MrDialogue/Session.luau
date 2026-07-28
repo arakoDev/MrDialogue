@@ -54,7 +54,7 @@ type ResolvedNode = {
 	prepared: PreparedNode?,
 }
 
--- Stands in for the end of an action node that has no `next`.
+-- Stands in for the end of an action node that has no next.
 local IMPLICIT_END_NODE: Types.EndNode = {
 	type = "end",
 }
@@ -69,7 +69,7 @@ local function resolveSpeaker(
 ): Net.SpeakerPayload?
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
 	if type(speakerId) ~= "string" then
-		-- `false` explicitly selects narration.
+		-- false explicitly selects narration.
 		return nil
 	end
 
