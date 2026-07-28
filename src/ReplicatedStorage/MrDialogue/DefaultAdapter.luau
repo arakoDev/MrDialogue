@@ -524,7 +524,10 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 
 	local punctuationPause = if config then config.punctuationPause else nil
 	if punctuationPause ~= nil and not isNonNegativeNumber(punctuationPause) then
-		error("MrDialogue.DefaultAdapter.new config.punctuationPause must be a non-negative number", 2)
+		error(
+			"MrDialogue.DefaultAdapter.new config.punctuationPause must be a non-negative number",
+			2
+		)
 	end
 
 	local configuredFreezeCharacter = if config then config.freezeCharacter else nil

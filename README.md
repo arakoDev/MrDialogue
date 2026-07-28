@@ -7,8 +7,7 @@
 <p>A dialogue package for Roblox.</p>
 
 <p>
-  <a href="<CREATOR_STORE_URL>"><img src="./assets/creatorhub.svg" alt="Get it on Creator Store" height="28"></a>
-  <a href="<WALLY_URL>"><img src="./assets/wally.svg" alt="Wally" height="24"></a>
+  <a href="https://wally.run/package/arakodev/mrdialogue"><img src="./assets/wally.svg" alt="Wally" height="24"></a>
 </p>
 
 <p>
@@ -34,6 +33,12 @@ MrDialogue lets Roblox experiences define conversations as data and run them for
 ```toml
 [dependencies]
 MrDialogue = "arakodev/mrdialogue@0.1.0"
+```
+
+Install the dependencies in your project:
+
+```sh
+wally install
 ```
 
 ## Usage Example
@@ -87,8 +92,6 @@ local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
 
 MrDialogue.Start()
 ```
-
-> **[Read the full MrDialogue documentation →](<DOCUMENTATION_URL>)**
 
 ## License
 

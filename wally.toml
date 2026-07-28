@@ -8,17 +8,17 @@ registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 repository = "https://github.com/arakoDev/MrDialogue"
 include = [
+	"assets",
 	"default.project.json",
 	"src",
 	"README.md",
 	"LICENSE",
 	"wally.toml",
 ]
-# Wally 0.3.2 re-includes matching paths but does not filter every non-matching path.
-# Keep development-only files excluded explicitly.
 exclude = [
+	"assets/creatorhub.svg",
 	"dev.project.json",
-	"docs",
+	".docs",
 	"rokit.toml",
 	"selene.toml",
 	"sourcemap.json",
