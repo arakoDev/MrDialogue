@@ -26,14 +26,12 @@ export type StartConfig = {
 
 local Client = {}
 local runtime: ClientRuntime? = nil
--- Only set when Start built the adapter itself; a caller-supplied one is theirs to destroy.
+-- Caller-supplied adapters remain caller-owned.
 local ownedDefaultAdapter: DefaultAdapter? = nil
 
 Client.DefaultAdapter = DefaultAdapterClass
 Client.Typewriter = TypewriterClass
 
--- There is one client runtime per player. Starting again hands back the one already listening
--- rather than doubling up on remote and input connections; call Stop first to swap adapters.
 function Client.Start(config: StartConfig?): ClientRuntime
 	if config ~= nil and type(config) ~= "table" then
 		error("MrDialogue.Client.Start requires a configuration table", 2)

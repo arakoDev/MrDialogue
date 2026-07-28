@@ -30,7 +30,6 @@ type OptionBinding = {
 
 type ContinueMode = "DISABLED" | "TYPING" | "ADVANCE" | "FINISH"
 
--- A panel that slides in from off-screen and back out again.
 type Slide = {
 	frame: GuiObject,
 	shown: UDim2,
@@ -59,9 +58,12 @@ type DefaultAdapterState = GuiReferences & {
 	optionsSlide: Slide,
 	defaultFreezeCharacter: boolean,
 	freezeCharacter: boolean,
+	freezeActive: boolean,
 	frozenHumanoid: Humanoid?,
 	originalWalkSpeed: number?,
 	originalJumpHeight: number?,
+	originalJumpPower: number?,
+	characterChildAddedConnection: RBXScriptConnection?,
 	continueMode: ContinueMode,
 	continueAction: (() -> ())?,
 	currentRunId: number?,
@@ -89,6 +91,18 @@ local NUMBER_KEYS: { [Enum.KeyCode]: number } = table.freeze({
 local APPEAR_TWEEN_INFO = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 local DISAPPEAR_TWEEN_INFO = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
 
+local function isFinite(value: number): boolean
+	return value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function isPositiveNumber(value: any): boolean
+	return type(value) == "number" and isFinite(value) and value > 0
+end
+
+local function isNonNegativeNumber(value: any): boolean
+	return type(value) == "number" and isFinite(value) and value >= 0
+end
+
 local function resolveGui(explicitGui: ScreenGui?): ScreenGui
 	local player = Players.LocalPlayer
 	if not player then
@@ -111,7 +125,6 @@ local function resolveGui(explicitGui: ScreenGui?): ScreenGui
 		return existing
 	end
 
-	-- Nothing in StarterGui, so fall back to the copy packaged with the library.
 	local assets = script.Parent:FindFirstChild("Assets")
 	local template = if assets then assets:FindFirstChild("DialogueGui") else nil
 	if not template or not template:IsA("ScreenGui") then
@@ -130,7 +143,7 @@ local function expectChild(
 	issues: { string }
 ): Instance?
 	if not parent then
-		return nil -- Its own absence was already reported; don't pile on.
+		return nil
 	end
 
 	local child = parent:FindFirstChild(name)
@@ -146,7 +159,6 @@ local function expectChild(
 	return child
 end
 
--- Reports everything wrong with the GUI at once: fixing a template one error per run is miserable.
 local function validateGui(gui: ScreenGui): GuiReferences
 	local issues = {}
 	local dialogueFrame = expectChild(gui, "DialogueFrame", "GuiObject", issues)
@@ -159,7 +171,6 @@ local function validateGui(gui: ScreenGui): GuiReferences
 	local optionsContainer = expectChild(optionsPanel, "OptionsFrame", "ScrollingFrame", issues)
 	local optionTemplate = expectChild(optionsContainer, "OptionTemplate", "GuiButton", issues)
 
-	-- A TextButton carries its own text; an ImageButton needs a label to put it in.
 	if optionTemplate and optionTemplate:IsA("ImageButton") then
 		expectChild(optionTemplate, "TextLabel", "TextLabel", issues)
 	end
@@ -226,7 +237,7 @@ local function slideOut(slide: Slide, completed: () -> ())
 		TweenService:Create(slide.frame, DISAPPEAR_TWEEN_INFO, { Position = slide.hidden })
 	slide.tween = tween
 	tween.Completed:Once(function(playbackState)
-		-- A new slide may have started while this one was playing; it owns the frame now.
+		-- Ignore completion from a tween that was replaced.
 		if slide.tween ~= tween or playbackState ~= Enum.PlaybackState.Completed then
 			return
 		end
@@ -246,42 +257,87 @@ local function setContinueEnabled(state: DefaultAdapterState, enabled: boolean)
 end
 
 local function restoreCharacterMovement(state: DefaultAdapterState)
+	local characterChildAddedConnection = state.characterChildAddedConnection
+	if characterChildAddedConnection then
+		characterChildAddedConnection:Disconnect()
+		state.characterChildAddedConnection = nil
+	end
+
 	local humanoid = state.frozenHumanoid
 	local originalWalkSpeed = state.originalWalkSpeed
 	local originalJumpHeight = state.originalJumpHeight
+	local originalJumpPower = state.originalJumpPower
 
 	state.frozenHumanoid = nil
 	state.originalWalkSpeed = nil
 	state.originalJumpHeight = nil
+	state.originalJumpPower = nil
 
 	if humanoid and humanoid.Parent then
-		if originalWalkSpeed then
+		if originalWalkSpeed ~= nil then
 			humanoid.WalkSpeed = originalWalkSpeed
 		end
-		if originalJumpHeight then
+		if originalJumpHeight ~= nil then
 			humanoid.JumpHeight = originalJumpHeight
+		end
+		if originalJumpPower ~= nil then
+			humanoid.JumpPower = originalJumpPower
 		end
 	end
 end
 
-local function freezeCharacterMovement(state: DefaultAdapterState)
+local function freezeHumanoid(state: DefaultAdapterState, humanoid: Humanoid)
 	restoreCharacterMovement(state)
-	if not state.freezeCharacter then
-		return
-	end
-
-	local player = Players.LocalPlayer
-	local character = if player then player.Character else nil
-	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
-	if not humanoid then
+	if not state.freezeActive or not state.freezeCharacter then
 		return
 	end
 
 	state.frozenHumanoid = humanoid
 	state.originalWalkSpeed = humanoid.WalkSpeed
 	state.originalJumpHeight = humanoid.JumpHeight
+	state.originalJumpPower = humanoid.JumpPower
 	humanoid.WalkSpeed = 0
 	humanoid.JumpHeight = 0
+	humanoid.JumpPower = 0
+end
+
+local function freezeCharacterMovement(state: DefaultAdapterState)
+	restoreCharacterMovement(state)
+	if not state.freezeActive or not state.freezeCharacter then
+		return
+	end
+
+	local player = Players.LocalPlayer
+	local character = if player then player.Character else nil
+	if not player or not character then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		freezeHumanoid(state, humanoid)
+		return
+	end
+
+	local connection: RBXScriptConnection?
+	connection = character.ChildAdded:Connect(function(child)
+		if state.characterChildAddedConnection ~= connection then
+			return
+		end
+		if not child:IsA("Humanoid") then
+			return
+		end
+
+		if connection then
+			connection:Disconnect()
+		end
+		state.characterChildAddedConnection = nil
+
+		if state.freezeActive and state.freezeCharacter and player.Character == character then
+			freezeHumanoid(state, child)
+		end
+	end)
+	state.characterChildAddedConnection = connection
 end
 
 local function clearDialogueSelection(state: DefaultAdapterState)
@@ -291,10 +347,7 @@ local function clearDialogueSelection(state: DefaultAdapterState)
 	end
 end
 
---[[
-	Keeps the gamepad cursor on whatever is actually actionable. Mouse and touch players get no
-	selection at all, since a highlighted button they never asked for looks like a bug.
-]]
+-- Keep gamepad selection on the active dialogue control.
 local function updateDialogueSelection(state: DefaultAdapterState)
 	if not state.gui.Enabled or UserInputService.PreferredInput ~= Enum.PreferredInput.Gamepad then
 		clearDialogueSelection(state)
@@ -341,7 +394,7 @@ local function activateContinue(state: DefaultAdapterState)
 	local action = state.continueAction
 	setContinueMode(state, "DISABLED", nil)
 
-	-- While text is still typing the click only completes it. Advancing is a second, separate click.
+	-- Revealing and advancing are separate clicks.
 	if mode == "TYPING" then
 		state.typewriter:Skip()
 	elseif action then
@@ -402,8 +455,7 @@ local function releaseOptions(state: DefaultAdapterState)
 	table.clear(state.optionBindings)
 end
 
--- Buttons are locked immediately but only destroyed once they are off-screen, so the slide-out has
--- something left to animate.
+-- Keep locked buttons around until the slide-out finishes.
 local function clearOptions(state: DefaultAdapterState, animate: boolean?)
 	lockOptions(state)
 
@@ -419,7 +471,6 @@ local function clearOptions(state: DefaultAdapterState, animate: boolean?)
 	end
 end
 
--- Options are numbered so the 1-9 shortcuts match what the player is reading.
 local function setOptionText(button: GuiButton, index: number, text: string)
 	local content = string.gsub(text, "^%s*%d+%.%s*", "", 1)
 	local numbered = `{index}. {content}`
@@ -466,12 +517,26 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		error("MrDialogue.DefaultAdapter.new config.gui must be a ScreenGui", 2)
 	end
 
+	local charsPerSecond = if config then config.charsPerSecond else nil
+	if charsPerSecond ~= nil and not isPositiveNumber(charsPerSecond) then
+		error("MrDialogue.DefaultAdapter.new config.charsPerSecond must be a positive number", 2)
+	end
+
+	local punctuationPause = if config then config.punctuationPause else nil
+	if punctuationPause ~= nil and not isNonNegativeNumber(punctuationPause) then
+		error("MrDialogue.DefaultAdapter.new config.punctuationPause must be a non-negative number", 2)
+	end
+
+	local configuredFreezeCharacter = if config then config.freezeCharacter else nil
+	if configuredFreezeCharacter ~= nil and type(configuredFreezeCharacter) ~= "boolean" then
+		error("MrDialogue.DefaultAdapter.new config.freezeCharacter must be a boolean", 2)
+	end
+
 	local references = validateGui(resolveGui(explicitGui))
-	local freezeCharacter = if config and config.freezeCharacter ~= nil
-		then config.freezeCharacter
+	local freezeCharacter = if configuredFreezeCharacter ~= nil
+		then configuredFreezeCharacter
 		else true
 
-	-- The dialogue box drops off the bottom of the screen; the options panel slides off the side.
 	local dialoguePosition = references.dialogueFrame.Position
 	local optionsPosition = references.optionsPanel.Position
 
@@ -489,8 +554,8 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		optionTemplate = references.optionTemplate,
 		typewriter = TypewriterClass.new(references.dialogueLabel),
 		typewriterConfig = {
-			charsPerSecond = if config then config.charsPerSecond else nil,
-			punctuationPause = if config then config.punctuationPause else nil,
+			charsPerSecond = charsPerSecond,
+			punctuationPause = punctuationPause,
 		},
 		connections = {},
 		dialogueSlide = newSlide(
@@ -513,6 +578,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		),
 		defaultFreezeCharacter = freezeCharacter,
 		freezeCharacter = freezeCharacter,
+		freezeActive = false,
 		continueMode = "DISABLED" :: ContinueMode,
 		optionBindings = {},
 		choiceLocked = true,
@@ -552,7 +618,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 	table.insert(
 		state.connections,
 		state.continueButton.Activated:Connect(function(input)
-			-- Space also jumps, so let it through unless the character is standing still anyway.
+			-- Leave Space to character controls when movement is not frozen.
 			if input.KeyCode == Enum.KeyCode.Space and not state.freezeCharacter then
 				return
 			end
@@ -597,6 +663,18 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		end)
 	)
 
+	local player = Players.LocalPlayer
+	if player then
+		table.insert(
+			state.connections,
+			player.CharacterAdded:Connect(function()
+				if state.freezeActive then
+					freezeCharacterMovement(state)
+				end
+			end)
+		)
+	end
+
 	return table.freeze(self) :: DefaultAdapter
 end
 
@@ -614,6 +692,7 @@ function DefaultAdapter.OnShow(self: DefaultAdapter, info: ClientRuntimeClass.Sh
 	state.dialogueLabel.Text = ""
 	state.dialogueLabel.MaxVisibleGraphemes = -1
 
+	state.freezeActive = true
 	freezeCharacterMovement(state)
 	state.gui.Enabled = true
 	slideIn(state.dialogueSlide)
@@ -696,6 +775,7 @@ end
 
 function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass.EndOutcome)
 	local state = states[self]
+	state.freezeActive = false
 	restoreCharacterMovement(state)
 	resetPresentation(state)
 	clearOptions(state, true)
@@ -716,6 +796,7 @@ function DefaultAdapter.Destroy(self: DefaultAdapter): boolean
 	end
 
 	state.destroyed = true
+	state.freezeActive = false
 	restoreCharacterMovement(state)
 	resetPresentation(state)
 	clearOptions(state)

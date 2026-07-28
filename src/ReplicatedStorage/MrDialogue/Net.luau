@@ -99,17 +99,30 @@ export type CancelMessage = {
 	sessionId: string,
 }
 
+export type ClientReadyMessage = {
+	type: "client_ready",
+}
+
+export type ClientStoppedMessage = {
+	type: "client_stopped",
+}
+
 export type ClientMessage =
 	PresentationCompletedMessage
 	| ChooseMessage
 	| AdvanceMessage
 	| CancelMessage
+	| ClientReadyMessage
+	| ClientStoppedMessage
 
 local remote: RemoteEvent? = nil
 
-local function getRuntimeFolder(): Instance
+local function getRuntimeFolder(): Folder
 	local existing = ReplicatedStorage:FindFirstChild(RUNTIME_NAME)
 	if existing then
+		if not existing:IsA("Folder") then
+			error(`ReplicatedStorage.{RUNTIME_NAME} must be a Folder`, 2)
+		end
 		return existing
 	end
 
@@ -120,10 +133,7 @@ local function getRuntimeFolder(): Instance
 	return folder
 end
 
---[[
-	Creates the shared remote, or adopts one another copy of the package already made — duplicated
-	Wally dependencies must end up on the same wire. Consumers never set this up themselves.
-]]
+-- Installed copies share one RemoteEvent.
 function Net._initializeServer(): RemoteEvent
 	local cached = remote
 	if cached then
@@ -132,7 +142,10 @@ function Net._initializeServer(): RemoteEvent
 
 	local runtime = getRuntimeFolder()
 	local existing = runtime:FindFirstChild(REMOTE_NAME)
-	if existing and existing:IsA("RemoteEvent") then
+	if existing then
+		if not existing:IsA("RemoteEvent") then
+			error(`ReplicatedStorage.{RUNTIME_NAME}.{REMOTE_NAME} must be a RemoteEvent`, 2)
+		end
 		remote = existing
 		return existing
 	end
@@ -152,7 +165,14 @@ function Net._getClientRemote(): RemoteEvent
 	end
 
 	local runtime = ReplicatedStorage:WaitForChild(RUNTIME_NAME)
-	local found = runtime:WaitForChild(REMOTE_NAME) :: RemoteEvent
+	if not runtime:IsA("Folder") then
+		error(`ReplicatedStorage.{RUNTIME_NAME} must be a Folder`, 2)
+	end
+
+	local found = runtime:WaitForChild(REMOTE_NAME)
+	if not found:IsA("RemoteEvent") then
+		error(`ReplicatedStorage.{RUNTIME_NAME}.{REMOTE_NAME} must be a RemoteEvent`, 2)
+	end
 	remote = found
 
 	return found

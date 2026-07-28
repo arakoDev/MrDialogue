@@ -145,7 +145,7 @@ local function startHeartbeat(state: TypewriterState, run: Run)
 				finishRun(state, run, "natural", true)
 				return
 			end
-			-- A GraphemeRevealed listener may have skipped or cancelled the run.
+			-- A listener may have stopped the run.
 			if not isCurrentRun(state, run) then
 				return
 			end
@@ -160,6 +160,10 @@ local function startHeartbeat(state: TypewriterState, run: Run)
 end
 
 function Typewriter.new(label: TextLabel): Typewriter
+	if typeof(label) ~= "Instance" or not label:IsA("TextLabel") then
+		error("Typewriter.new requires a TextLabel", 2)
+	end
+
 	local completedEvent = Instance.new("BindableEvent")
 	local graphemeRevealedEvent = Instance.new("BindableEvent")
 
@@ -180,13 +184,7 @@ function Typewriter.new(label: TextLabel): Typewriter
 	return table.freeze(self) :: Typewriter
 end
 
---[[
-	Sets the final text once and animates MaxVisibleGraphemes over it. Slicing the string instead
-	would break UTF-8 characters apart, leak half-written RichText tags, and fight AutoLocalize.
-
-	Returns an id that identifies this run in Completed and GraphemeRevealed, so a listener can tell
-	its own run from one that replaced it.
-]]
+-- MaxVisibleGraphemes keeps UTF-8 and RichText intact while the text is revealed.
 function Typewriter.Play(self: Typewriter, text: string, config: TypewriterConfig?): number
 	local state = states[self]
 	if not state or state.destroyed then
@@ -208,8 +206,7 @@ function Typewriter.Play(self: Typewriter, text: string, config: TypewriterConfi
 		punctuationPause = punctuationPause,
 	}
 
-	-- Claim the slot before cancelling the old run, so its Completed listeners already see this run
-	-- as the current one and cannot reveal text that no longer belongs on screen.
+	-- Install the new run first so callbacks from the old one cannot affect it.
 	local previousRun = state.currentRun
 	state.currentRun = run
 	if previousRun then
@@ -220,7 +217,7 @@ function Typewriter.Play(self: Typewriter, text: string, config: TypewriterConfi
 	end
 
 	state.label.Text = text
-	-- ContentText, not Text: RichText markup is not shown and must not be counted.
+	-- ContentText excludes RichText markup from the grapheme count.
 	run.graphemes = getGraphemes(state.label.ContentText)
 	state.label.MaxVisibleGraphemes = 0
 
@@ -278,8 +275,7 @@ function Typewriter.Destroy(self: Typewriter)
 		finishRun(state, run, "cancelled", false)
 	end
 
-	-- Deferred so the final Completed above is still delivered; destroying a BindableEvent drops
-	-- anything it has not dispatched yet.
+	-- Let the final Completed event finish dispatching before cleanup.
 	local completedEvent = state.completedEvent
 	local graphemeRevealedEvent = state.graphemeRevealedEvent
 	task.defer(function()

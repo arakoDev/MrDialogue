@@ -17,8 +17,6 @@ export type Dialogue = {
 	) -> (SessionClass.Session?, string?),
 }
 
--- A named handler the definition depends on, remembered while validating so Start does not have to
--- walk the graph again.
 type Requirement = {
 	kind: "condition" | "action",
 	name: string,
@@ -40,16 +38,34 @@ local NODE_TYPES: { [string]: boolean } = {
 
 table.freeze(NODE_TYPES)
 
--- Definitions are plain data authored elsewhere, so the message carries the path to the mistake and
--- the error is raised without a position: a line number inside this validator helps nobody.
 local function fail(message: string): never
 	error(`MrDialogue.new: {message}`, 0)
 end
 
---[[
-	Copies the definition so a game can keep editing (or reusing) the table it handed over, and
-	freezes it so nothing can rewrite a conversation that sessions are already walking.
-]]
+local function validateArray(value: any, path: string): number
+	if type(value) ~= "table" then
+		fail(`{path} must be an array`)
+	end
+
+	local count = 0
+	local highestIndex = 0
+	for key in pairs(value) do
+		if type(key) ~= "number" or key % 1 ~= 0 or key < 1 then
+			fail(`{path} must be an array`)
+		end
+
+		count += 1
+		highestIndex = math.max(highestIndex, key)
+	end
+
+	if count ~= highestIndex then
+		fail(`{path} must be a dense array without missing entries`)
+	end
+
+	return count
+end
+
+-- Keep running sessions isolated from later edits to the source definition.
 local function deepCopy(value: any, copies: { [any]: any }): any
 	if type(value) ~= "table" then
 		return value
@@ -76,8 +92,8 @@ local function validateSpec(kind: "condition" | "action", spec: any, path: strin
 	if type(spec.name) ~= "string" or spec.name == "" then
 		fail(`{path}.name must be a non-empty string`)
 	end
-	if spec.arguments ~= nil and type(spec.arguments) ~= "table" then
-		fail(`{path}.arguments must be an array`)
+	if spec.arguments ~= nil then
+		validateArray(spec.arguments, `{path}.arguments`)
 	end
 
 	return { kind = kind, name = spec.name, path = path }
@@ -105,6 +121,10 @@ local function validateSpeakers(definition: any)
 	end
 
 	for speakerId, speakerValue in pairs(speakers or {}) do
+		if type(speakerId) ~= "string" or speakerId == "" then
+			fail("definition.speakers keys must be non-empty strings")
+		end
+
 		local path = `speaker "{tostring(speakerId)}"`
 
 		if type(speakerValue) ~= "table" then
@@ -132,6 +152,9 @@ local function validateSpeakers(definition: any)
 			local emotions = emotionsValue :: { [any]: unknown }
 
 			for emotion, emotionIcon in pairs(emotions) do
+				if type(emotion) ~= "string" or emotion == "" then
+					fail(`{path} emotion keys must be non-empty strings`)
+				end
 				if type(emotionIcon) ~= "string" then
 					fail(`{path} emotion "{tostring(emotion)}" must map to an icon string`)
 				end
@@ -140,14 +163,21 @@ local function validateSpeakers(definition: any)
 	end
 
 	local defaultSpeaker = definition.defaultSpeaker
-	if defaultSpeaker ~= nil and (speakers == nil or speakers[defaultSpeaker] == nil) then
-		fail(`definition.defaultSpeaker references unknown speaker "{tostring(defaultSpeaker)}"`)
+	if defaultSpeaker ~= nil then
+		if type(defaultSpeaker) ~= "string" or defaultSpeaker == "" then
+			fail("definition.defaultSpeaker must be a non-empty speaker key")
+		end
+		if speakers == nil or speakers[defaultSpeaker] == nil then
+			fail(`definition.defaultSpeaker references unknown speaker "{defaultSpeaker}"`)
+		end
 	end
 end
 
--- Mirrors the resolution order Session uses: an explicit speaker wins, `false` suppresses the
--- dialogue default, and only then does defaultSpeaker apply.
 local function validatePresentation(nodeId: string, node: any, definition: any)
+	if node.emotion ~= nil and (type(node.emotion) ~= "string" or node.emotion == "") then
+		fail(`node "{nodeId}" emotion must be a non-empty emotion key`)
+	end
+
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
 	if speakerId == nil or speakerId == false then
 		if node.emotion ~= nil then
@@ -203,7 +233,7 @@ local function validateChoice(
 		fail(`promptless choice node "{nodeId}" cannot set a speaker or emotion`)
 	end
 
-	if type(node.options) ~= "table" or #node.options == 0 then
+	if validateArray(node.options, `choice node "{nodeId}" options`) == 0 then
 		fail(`choice node "{nodeId}" must contain at least one option`)
 	end
 
@@ -329,10 +359,7 @@ function Dialogue.new(definition: any): Dialogue
 	return table.freeze(self)
 end
 
---[[
-	Handler registration is checked here rather than in `new` because games routinely load their
-	dialogue before the quest or inventory service that backs it has registered anything.
-]]
+-- Definitions may be created before the game registers their handlers.
 function Dialogue.Start(
 	self: DialogueInternal,
 	player: Player,
