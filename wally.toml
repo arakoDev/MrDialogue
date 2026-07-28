@@ -1,14 +1,13 @@
 [package]
 name = "arakodev/mrdialogue"
-description = "Graph-based dialogue runtime for Roblox with branching, conditions, actions, sessions, and replaceable UI."
-version = "0.1.0"
+description = "A dialogue package for Roblox."
+version = "0.1.1"
 license = "MIT"
 authors = ["arakoDev"]
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 repository = "https://github.com/arakoDev/MrDialogue"
 include = [
-	"assets",
 	"default.project.json",
 	"src",
 	"README.md",
@@ -16,7 +15,7 @@ include = [
 	"wally.toml",
 ]
 exclude = [
-	"assets/creatorhub.svg",
+	"assets",
 	"dev.project.json",
 	".docs",
 	"rokit.toml",

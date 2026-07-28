@@ -5,7 +5,10 @@
 
     "ReplicatedStorage": {
       "Source": {
-        "$path": "src/ReplicatedStorage"
+        "$className": "Folder",
+        "MrDialogue": {
+          "$path": "src"
+        }
       }
     }
   }

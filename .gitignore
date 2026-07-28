@@ -23,7 +23,7 @@ Packages/
 # Rojo build output
 *.rbxm
 *.rbxmx
-!src/ReplicatedStorage/MrDialogue/Assets/DialogueGui.rbxm
+!src/Assets/DialogueGui.rbxm
 
 # OS/editor
 .DS_Store

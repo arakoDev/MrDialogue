@@ -1,6 +1,6 @@
 {
   "name": "MrDialogue",
   "tree": {
-    "$path": "src/ReplicatedStorage/MrDialogue"
+    "$path": "src"
   }
 }
