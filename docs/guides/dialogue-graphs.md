@@ -38,19 +38,36 @@ reached directly after choosing an option runs immediately.
 
 ## Server and client lifecycle
 
-```text
-Server                               Client adapter
-  │                                       │
-  ├─ Start session ──────────────────────▶ OnShow
-  ├─ Present line ───────────────────────▶ OnPresentation
-  │◀──────────── presentationCompleted ───┤
-  ├─ Allow next step ────────────────────▶ OnAdvanceReady
-  │◀────────────────────────── advance ───┤
-  ├─ Offer choices ──────────────────────▶ OnChoices
-  │◀─────────────────────────── choose ───┤
-  ├─ Complete or cancel ─────────────────▶ OnEnd
-  │                                       │
-```
+The adapter receives only the callback that matches the current state. A dialogue
+does not pass through every callback in the order shown below.
+
+### Starting and ending
+
+| Step | Server | Client adapter |
+| ---: | --- | --- |
+| 1 | Starts the session | Receives `OnShow` |
+| 2 | Resolves the entry node | Receives a line, choices, or the end state |
+| 3 | Completes or cancels the session | Receives `OnEnd` |
+
+### Presenting a line
+
+| Step | Server | Client adapter |
+| ---: | --- | --- |
+| 1 | Sends the line | Receives `OnPresentation` |
+| 2 | Waits for the presentation to finish | Calls `presentationCompleted()` |
+| 3a | Allows the player to continue | Receives `OnAdvanceReady`, then calls `advance()` |
+| 3b | Allows the player to finish | Receives `OnFinishReady`, then calls `finish()` |
+
+Steps 3a and 3b are alternatives. `OnFinishReady` is used when the line has no next
+node; otherwise, `OnAdvanceReady` moves the graph forward.
+
+### Presenting choices
+
+| Step | Server | Client adapter |
+| ---: | --- | --- |
+| 1 | Evaluates and sends the available options | Receives `OnChoices` |
+| 2 | Waits for a valid selection | Calls `choose(index)` |
+| 3 | Resolves the selected path | Receives the next presentation or `OnEnd` |
 
 The callbacks passed to an adapter are valid only for the state that created them.
 Calling an old `advance` or `choose` callback after the server has moved on does
