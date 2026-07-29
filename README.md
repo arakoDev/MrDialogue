@@ -29,18 +29,6 @@ MrDialogue lets Roblox experiences define conversations as data and run them for
 - **Customizable:** Use the included UI or supply a custom client adapter.
 - **Typed and Validated:** The package uses strict Luau types and validates dialogue definitions and client adapters.
 
-## Documentation
-
-Read the guides and API reference at
-[mrdialogue.arako.dev](https://mrdialogue.arako.dev/).
-
-To preview the documentation locally:
-
-```sh
-python -m pip install -r requirements.txt
-mkdocs serve
-```
-
 ## Usage Example
 
 Create the dialogue and start it from a server Script under a `ProximityPrompt`:
@@ -92,6 +80,8 @@ local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
 
 MrDialogue.Start()
 ```
+
+[**Read the full MrDialogue documentation →**](https://mrdialogue.arako.dev/)
 
 ## License
 
