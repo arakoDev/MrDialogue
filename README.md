@@ -28,19 +28,6 @@ MrDialogue lets Roblox experiences define conversations as data and run them for
 - **Customizable:** Use the included UI or supply a custom client adapter.
 - **Typed and Validated:** The package uses strict Luau types and validates dialogue definitions and client adapters.
 
-## Installation
-
-```toml
-[dependencies]
-MrDialogue = "arakodev/mrdialogue@0.1.0"
-```
-
-Install the dependencies in your project:
-
-```sh
-wally install
-```
-
 ## Usage Example
 
 Create the dialogue and start it from a server Script under a `ProximityPrompt`:
