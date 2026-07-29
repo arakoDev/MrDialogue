@@ -32,12 +32,31 @@ Then run `wally install` and map the package into `ReplicatedStorage`.
 
 ## Example
 
+MrDialogue runs on both the client and server. Start the client runtime once, then
+start server-owned dialogue definitions in response to player interactions.
+
+### Client
+
+Create a `LocalScript` under `StarterPlayerScripts`:
+
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
 
-local directions = MrDialogue.new({
+MrDialogue.Start()
+```
+
+### Server
+
+Create a server `Script` under a `ProximityPrompt`:
+
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+
+local dialogue = MrDialogue.new({
 	format = 1,
 	id = "directions",
 	entry = "greeting",
@@ -61,19 +80,16 @@ local directions = MrDialogue.new({
 		},
 		done = {
 			type = "end",
-			result = "finished",
 		},
 	},
 })
-```
 
-Start the definition for a player from the server:
-
-```luau
-local session, startError = directions:Start(player)
-if not session then
-	warn(`Could not start dialogue: {startError}`)
-end
+script.Parent.Triggered:Connect(function(player)
+	local session, startError = dialogue:Start(player)
+	if not session then
+		warn(`Could not start dialogue: {startError}`)
+	end
+end)
 ```
 
 ## Documentation

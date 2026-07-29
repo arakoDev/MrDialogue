@@ -31,7 +31,24 @@ MrDialogue lets Roblox experiences define conversations as data and run them for
 
 ## Usage Example
 
-Create the dialogue and start it from a server Script under a `ProximityPrompt`:
+MrDialogue runs on both the client and server. Start the client runtime once, then
+start server-owned dialogue definitions in response to player interactions.
+
+### Client
+
+Create a `LocalScript` under `StarterPlayerScripts`:
+
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+
+MrDialogue.Start()
+```
+
+### Server
+
+Create a server `Script` under a `ProximityPrompt`:
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -67,18 +84,11 @@ local dialogue = MrDialogue.new({
 })
 
 script.Parent.Triggered:Connect(function(player)
-	dialogue:Start(player)
+	local session, startError = dialogue:Start(player)
+	if not session then
+		warn(`Could not start dialogue: {startError}`)
+	end
 end)
-```
-
-Initialize MrDialogue from a LocalScript in `StarterPlayerScripts`:
-
-```luau
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
-
-MrDialogue.Start()
 ```
 
 [**Read the full MrDialogue documentation →**](https://mrdialogue.arako.dev/)
