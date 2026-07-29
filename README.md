@@ -1,6 +1,6 @@
 <div align="center">
 
-<img width="124" height="124" src="./assets/logo.png" alt="MrDialogue Logo">
+<img height="100" src="./assets/logo.svg" alt="MrDialogue Logo">
 
 <h1>MrDialogue</h1>
 
@@ -12,7 +12,7 @@
 
 <p>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="Package version">
+  <img src="https://img.shields.io/badge/version-0.1.2-blue?style=flat-square" alt="Package version">
 </p>
 
 </div>
