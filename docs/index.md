@@ -11,7 +11,7 @@ hide:
 A dialogue package for Roblox.
 
 [Get started](getting-started/installation.md){ .md-button .md-button--primary }
-[API reference](api/server.md){ .md-button }
+[API reference](api/server.md){ .md-button .mrd-button--secondary }
 
 </div>
 

@@ -79,16 +79,29 @@
   color: var(--mrd-white);
 }
 
-[data-md-color-scheme="slate"] .md-typeset .md-button:not(.md-button--primary) {
-  border-color: #64748b;
-  color: #e2e8f0;
+.md-typeset .mrd-button--secondary {
+  border-color: var(--mrd-blue);
+  color: #1d4ed8;
 }
 
-[data-md-color-scheme="slate"]
-  .md-typeset
-  .md-button:not(.md-button--primary):is(:hover, :focus) {
-  border-color: var(--mrd-blue-light);
-  color: var(--mrd-blue-light);
+.md-typeset .mrd-button--secondary:is(:hover, :focus) {
+  border-color: var(--mrd-blue) !important;
+  background-color: var(--mrd-blue) !important;
+  color: var(--mrd-white) !important;
+  -webkit-text-fill-color: var(--mrd-white);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .mrd-button--secondary {
+  border-color: #64748b;
+  color: #e2e8f0;
+  -webkit-text-fill-color: #e2e8f0;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .mrd-button--secondary:is(:hover, :focus) {
+  border-color: var(--mrd-blue-light) !important;
+  background-color: var(--mrd-blue-light) !important;
+  color: var(--mrd-black) !important;
+  -webkit-text-fill-color: var(--mrd-black);
 }
 
 [data-md-color-scheme="slate"] .md-typeset .md-button--primary {

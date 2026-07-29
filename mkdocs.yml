@@ -82,7 +82,7 @@ markdown_extensions:
       permalink: true
 
 extra_css:
-  - stylesheets/extra.css
+  - stylesheets/theme.css
 
 extra:
   social:
