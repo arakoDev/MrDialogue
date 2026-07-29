@@ -8,6 +8,7 @@
 
 <p>
   <a href="https://wally.run/package/arakodev/mrdialogue"><img src="./assets/wally.svg" alt="Wally" height="24"></a>
+  <a href="https://mrdialogue.arako.dev/"><img src="https://img.shields.io/badge/docs-mrdialogue.arako.dev-0f172a?style=flat-square" alt="Documentation"></a>
 </p>
 
 <p>
@@ -27,6 +28,18 @@ MrDialogue lets Roblox experiences define conversations as data and run them for
 - **Server-Authoritative:** Conditions, actions, choices, and dialogue state are evaluated and controlled by the server.
 - **Customizable:** Use the included UI or supply a custom client adapter.
 - **Typed and Validated:** The package uses strict Luau types and validates dialogue definitions and client adapters.
+
+## Documentation
+
+Read the guides and API reference at
+[mrdialogue.arako.dev](https://mrdialogue.arako.dev/).
+
+To preview the documentation locally:
+
+```sh
+python -m pip install -r requirements.txt
+mkdocs serve
+```
 
 ## Usage Example
 

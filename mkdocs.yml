@@ -1,0 +1,94 @@
+site_name: MrDialogue
+site_url: https://mrdialogue.arako.dev/
+site_description: A dialogue package for Roblox.
+repo_name: arakoDev/MrDialogue
+repo_url: https://github.com/arakoDev/MrDialogue
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; 2026 arakoDev
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - content.action.edit
+    - content.action.view
+    - content.code.copy
+    - content.tabs.link
+    - navigation.footer
+    - navigation.instant
+    - navigation.path
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Your first dialogue: getting-started/first-dialogue.md
+  - Guides:
+      - Dialogue graphs: guides/dialogue-graphs.md
+      - Nodes: guides/nodes.md
+      - Speakers and emotions: guides/speakers.md
+      - Conditions and actions: guides/conditions-actions.md
+      - Sessions: guides/sessions.md
+      - Client interface: guides/client-interface.md
+  - Examples:
+      - Branching conversation: examples/branching-conversation.md
+  - API:
+      - Server API: api/server.md
+      - Client API: api/client.md
+      - Types: api/types.md
+  - Troubleshooting: troubleshooting.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/arakoDev/MrDialogue
+      name: MrDialogue on GitHub
+    - icon: material/web
+      link: https://arako.dev
+      name: arako.dev

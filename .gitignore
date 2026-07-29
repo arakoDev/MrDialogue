@@ -41,3 +41,8 @@ sourcemap.json
 .docs/
 .agents/
 .claude/
+
+# MkDocs
+site/
+.venv/
+__pycache__/
