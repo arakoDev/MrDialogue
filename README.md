@@ -8,10 +8,10 @@
 
 <p>
   <a href="https://wally.run/package/arakodev/mrdialogue"><img src="./assets/wally.svg" alt="Wally" height="24"></a>
-  <a href="https://mrdialogue.arako.dev/"><img src="https://img.shields.io/badge/docs-mrdialogue.arako.dev-0f172a?style=flat-square" alt="Documentation"></a>
 </p>
 
 <p>
+  <a href="https://mrdialogue.arako.dev/"><img src="https://img.shields.io/badge/docs-mrdialogue.arako.dev-blue?style=flat-square" alt="Documentation"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/version-0.1.2-blue?style=flat-square" alt="Package version">
 </p>
