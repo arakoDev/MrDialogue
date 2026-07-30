@@ -1,18 +1,33 @@
 --!strict
 
 local Types = require(script.Parent.Types)
+local Net = require(script.Parent.Net)
 
 local Conditions = {}
 
 local handlers: { [string]: Types.ConditionHandler } = {}
 
+local function safeToString(value: any): string
+	local result = table.pack(pcall(tostring, value))
+	if result[1] and type(result[2]) == "string" then
+		return result[2] :: string
+	end
+	return "<unprintable value>"
+end
+
 local function report(code: string, name: string, detail: any)
-	warn(`[MrDialogue][{code}] Condition "{name}" failed closed: {tostring(detail)}`)
+	warn(`[MrDialogue][{code}] Condition "{name}" failed closed: {safeToString(detail)}`)
 end
 
 function Conditions.Register(name: any, handler: any)
 	if type(name) ~= "string" or name == "" then
 		error("MrDialogue.RegisterCondition requires a non-empty name", 3)
+	end
+	if utf8.len(name) == nil then
+		error("MrDialogue.RegisterCondition name must contain valid UTF-8", 3)
+	end
+	if #name > Net.Limits.maxIdBytes then
+		error(`MrDialogue.RegisterCondition name must not exceed {Net.Limits.maxIdBytes} bytes`, 3)
 	end
 	if type(handler) ~= "function" then
 		error("MrDialogue.RegisterCondition requires a function", 3)
@@ -28,7 +43,6 @@ function Conditions._isRegistered(name: string): boolean
 	return handlers[name] ~= nil
 end
 
--- Conditions are synchronous and fail closed if they throw, yield, or return the wrong type.
 function Conditions._evaluate(spec: Types.ConditionSpec, context: Types.DialogueContext): boolean
 	local handler = handlers[spec.name]
 	if not handler then

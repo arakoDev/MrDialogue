@@ -112,7 +112,9 @@ The ID supplied in the definition.
 
 ### `session`
 
-The active session. A handler may call `context.session:Cancel()` when appropriate.
+The active session. Either kind of handler may call `context.session:Cancel()` when
+appropriate. Resolution stops immediately after cancellation; later graph actions are
+not executed.
 
 ### `npc`
 
@@ -156,13 +158,18 @@ local session, startError = dialogue:Start(player)
 Starting before registration returns an error instead of opening a partial session.
 Names cannot be registered twice.
 
+Handler names must be valid UTF-8 and are limited to 128 bytes. Each `arguments`
+array is limited to 100 entries.
+
 ## Warning codes
 
 | Code | Meaning |
 | --- | --- |
+| `CONDITION_NOT_REGISTERED` | A condition is unavailable during execution |
 | `CONDITION_THROWN` | A condition raised an error |
 | `CONDITION_YIELDED` | A condition attempted to yield |
 | `CONDITION_INVALID_RESULT` | A condition did not return a boolean |
+| `ACTION_NOT_REGISTERED` | An action is unavailable during execution |
 | `ACTION_THROWN` | An action raised an error |
 | `ACTION_YIELDED` | An action attempted to yield |
 | `ACTION_FAILED` | An action returned `false` |

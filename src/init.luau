@@ -1,18 +1,7 @@
 --!strict
 
 local RunService = game:GetService("RunService")
-
-if RunService:IsClient() then
-	return require(script.Client) :: any
-end
-
-local Net = require(script.Net)
 local Types = require(script.Types)
-local Actions = require(script.Actions)
-local Conditions = require(script.Conditions)
-local DialogueClass = require(script.Dialogue)
-
-Net._initializeServer()
 
 export type Session = Types.Session
 export type SessionOptions = Types.SessionOptions
@@ -31,20 +20,10 @@ export type ActionNode = Types.ActionNode
 export type EndNode = Types.EndNode
 export type DialogueNode = Types.DialogueNode
 export type DialogueDefinition = Types.DialogueDefinition
-export type Dialogue = DialogueClass.Dialogue
+export type Dialogue = Types.Dialogue
 
-local MrDialogue = {}
-
-function MrDialogue.RegisterAction(name: string, handler: Types.ActionHandler)
-	Actions.Register(name, handler)
+if RunService:IsClient() then
+	return require(script.Client) :: any
 end
 
-function MrDialogue.RegisterCondition(name: string, handler: Types.ConditionHandler)
-	Conditions.Register(name, handler)
-end
-
-function MrDialogue.new(definition: Types.DialogueDefinition): DialogueClass.Dialogue
-	return DialogueClass.new(definition)
-end
-
-return table.freeze(MrDialogue) :: any
+return require(script.Server) :: any

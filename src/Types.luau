@@ -9,6 +9,7 @@ export type SessionOutcome = {
 export type Session = {
 	Player: Player,
 	DialogueId: string,
+	Ended: RBXScriptSignal,
 	IsActive: (self: Session) -> boolean,
 	GetOutcome: (self: Session) -> SessionOutcome?,
 	Cancel: (self: Session, reason: string?) -> boolean,
@@ -17,6 +18,7 @@ export type Session = {
 export type SessionOptions = {
 	npc: Instance?,
 	data: { [string]: any }?,
+	timeoutSeconds: number?,
 }
 
 export type DialogueContext = {
@@ -101,6 +103,11 @@ export type DialogueDefinition = {
 	defaultIcon: string?,
 	freezeCharacter: boolean?,
 	endDialogueOnDeath: boolean?,
+}
+
+export type Dialogue = {
+	Id: string,
+	Start: (self: Dialogue, player: Player, options: SessionOptions?) -> (Session?, string?),
 }
 
 return {}

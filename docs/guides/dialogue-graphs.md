@@ -46,8 +46,12 @@ does not pass through every callback in the order shown below.
 | Step | Server | Client adapter |
 | ---: | --- | --- |
 | 1 | Starts the session | Receives `OnShow` |
-| 2 | Resolves the entry node | Receives a line, choices, or the end state |
+| 2 | Resolves the entry node | Receives a line or choices |
 | 3 | Completes or cancels the session | Receives `OnEnd` |
+
+If entry resolution completes or cancels before producing a visible node, the session
+is server-only and already inactive when returned. No client interface was opened, so
+the adapter receives neither `OnShow` nor `OnEnd`.
 
 ### Presenting a line
 
@@ -57,15 +61,19 @@ does not pass through every callback in the order shown below.
 | 2 | Waits for the presentation to finish | Calls `presentationCompleted()` |
 | 3a | Allows the player to continue | Receives `OnAdvanceReady`, then calls `advance()` |
 | 3b | Allows the player to finish | Receives `OnFinishReady`, then calls `finish()` |
+| 3c | Reaches a promptless choice | Receives `OnChoices` immediately |
 
-Steps 3a and 3b are alternatives. `OnFinishReady` is used when the line has no next
-node; otherwise, `OnAdvanceReady` moves the graph forward.
+Steps 3a, 3b, and 3c are alternatives. `OnFinishReady` is used when the line has no
+`next` or when its continuation currently resolves through silent nodes to an `end`.
+MrDialogue re-evaluates that continuation on the actual click, so volatile branch
+conditions do not remain cached while the player waits.
 
 ### Presenting choices
 
 | Step | Server | Client adapter |
 | ---: | --- | --- |
-| 1 | Evaluates and sends the available options | Receives `OnChoices` |
+| 1a | Optionally sends the choice prompt | Receives `OnPresentation` with `kind = "choice_prompt"` |
+| 1b | Evaluates and sends the available options | Receives `OnChoices` |
 | 2 | Waits for a valid selection | Calls `choose(index)` |
 | 3 | Resolves the selected path | Receives the next presentation or `OnEnd` |
 
@@ -91,6 +99,10 @@ If the condition changed, MrDialogue sends a refreshed set of available choices.
 - Conditions and actions must have non-empty names.
 - Speaker and emotion references must exist.
 - Arrays must be dense and one-based.
+- Definitions may contain at most 10,000 nodes, choices at most 100 options, and
+  handler specs at most 100 arguments.
+- IDs, presentation text, speaker data, icons, results, and reasons must be valid
+  UTF-8 and fit the byte limits exposed by `MrDialogue.Limits`.
 
 The validated definition is deep-copied and frozen. Editing the source table after
 calling `MrDialogue.new()` does not change existing or future sessions for that

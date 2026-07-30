@@ -11,7 +11,7 @@ Initialize MrDialogue once from a `LocalScript` under `StarterPlayerScripts`:
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Client)
 
 MrDialogue.Start()
 ```
@@ -19,6 +19,12 @@ MrDialogue.Start()
 Do not start a server dialogue immediately when `PlayerAdded` fires. The client
 needs time to load and announce readiness. A player interaction such as a
 `ProximityPrompt` naturally happens after initialization.
+
+### Client startup times out waiting for `MrDialogueRuntime`
+
+Require `ReplicatedStorage.Packages.MrDialogue.Server` once from
+`ServerScriptService` before starting the client. Version 1.0 waits at most 10 seconds
+and then reports a setup error instead of yielding forever.
 
 ### `player already has an active dialogue session`
 
@@ -88,6 +94,28 @@ Call each action callback only for the screen state that received it:
 Old callbacks intentionally become no-ops after the runtime moves to another
 state.
 
+Adapter methods must not throw or yield. The runtime contains either failure, logs
+`CLIENT_ADAPTER_CALLBACK_THROWN` or `CLIENT_ADAPTER_CALLBACK_YIELDED`, and cancels
+with `client_error`. Wrap asynchronous UI work in your own task, return immediately,
+and invoke the provided action callback later.
+
+## The session ends with `timeout` or `rate_limited`
+
+`timeout` means no accepted client response arrived within `SessionOptions.timeoutSeconds`
+(120 seconds by default). `rate_limited` means the client sent more than 120 dialogue
+messages within 10 seconds. Both safeguards release the one-session slot.
+
+A session with `reason = "network_error"` means the server could not send a
+presentation or interaction update. MrDialogue ends it immediately and releases the
+session slot; check for a disconnected player or game code that replaced or destroyed
+the package remote.
+
+## Another package copy owns the remote
+
+Only one server copy of MrDialogue 1.x may own `DialogueRemoteV1`. Remove duplicate
+or side-by-side installations and make every server script require the same package
+instance. The protocol fails fast instead of silently stranding one copy's session.
+
 ## Definition validation throws
 
 Verify these common constraints:
@@ -95,9 +123,10 @@ Verify these common constraints:
 - `format` is `1`;
 - `id`, node IDs, and option IDs are non-empty strings;
 - every transition targets an existing node;
-- node and choice arrays are dense;
+- choice option and handler argument arrays are dense;
 - referenced speakers and emotions exist;
 - a choice has at least one option;
+- the graph and its strings stay within `MrDialogue.Limits`;
 - all fields use the types in [Types](api/types.md).
 
 Definitions are validated early so graph mistakes fail during setup rather than

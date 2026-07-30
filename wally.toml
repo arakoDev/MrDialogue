@@ -1,7 +1,7 @@
 [package]
 name = "arakodev/mrdialogue"
 description = "A dialogue package for Roblox."
-version = "0.1.2"
+version = "1.0.0"
 license = "MIT"
 authors = ["arakoDev"]
 registry = "https://github.com/UpliftGames/wally-index"
@@ -10,18 +10,10 @@ repository = "https://github.com/arakoDev/MrDialogue"
 include = [
 	"default.project.json",
 	"src",
+	"src/**",
 	"LICENSE",
 	"wally.toml",
 ]
-exclude = [
-	"assets",
-	"dev.project.json",
-	".docs",
-	"rokit.toml",
-	"selene.toml",
-	"sourcemap.json",
-	"stylua.toml",
-	"README.md",
-]
+exclude = ["**"]
 
 [dependencies]

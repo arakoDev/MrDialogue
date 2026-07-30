@@ -7,7 +7,18 @@ and start sessions.
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Server)
+```
+
+The explicit `.Server` entry point preserves complete Luau types. Requiring the
+package root remains supported as an untyped compatibility shortcut.
+
+### Release information
+
+```luau
+MrDialogue.Version -- "1.0.0"
+MrDialogue.ProtocolVersion -- 1
+MrDialogue.Limits -- frozen table of protocol and definition bounds
 ```
 
 ## MrDialogue
@@ -103,6 +114,7 @@ Starts an independent session for `player`.
 ```luau
 local session, startError = dialogue:Start(player, {
 	npc = workspace.Guide,
+	timeoutSeconds = 120,
 	data = {
 		questId = "find_the_map",
 	},
@@ -124,10 +136,16 @@ When the request is valid but cannot start, it returns `nil` and a message:
 
 Invalid argument types throw instead of returning an error message.
 
+`timeoutSeconds` is an inactivity timeout reset after each accepted client response.
+It defaults to `120` and may be configured up to `3600`. A timed-out session is
+cancelled with reason `timeout`.
+
 !!! note
 
     A graph that resolves immediately to an `end` node still returns a
-    `Session`, but it is already inactive.
+    `Session`, but it is already inactive. Because it never opened a client
+    presentation, the adapter receives neither `OnShow` nor `OnEnd`; inspect the
+    server outcome directly.
 
 [:octicons-code-16: Source](https://github.com/arakoDev/MrDialogue/blob/main/src/Dialogue.luau)
 
@@ -140,6 +158,7 @@ A session represents one player's run through a dialogue.
 ```luau
 Session.Player: Player
 Session.DialogueId: string
+Session.Ended: RBXScriptSignal
 ```
 
 <span class="mrd-badge mrd-badge--readonly">Read only</span>
@@ -166,6 +185,20 @@ if outcome and outcome.status == "completed" then
 	print(outcome.result)
 end
 ```
+
+### `Session.Ended`
+
+Fires once with the frozen `SessionOutcome` when an active session completes or is
+cancelled:
+
+```luau
+session.Ended:Connect(function(outcome)
+	print(outcome.status, outcome.result or outcome.reason)
+end)
+```
+
+An immediately terminal session can finish before a listener is connected; always
+check `GetOutcome()` once after `Dialogue:Start()`.
 
 ### `Session:Cancel`
 

@@ -1,6 +1,7 @@
 --!strict
 
 local Types = require(script.Parent.Types)
+local Net = require(script.Parent.Net)
 
 local Actions = {}
 
@@ -16,6 +17,12 @@ function Actions.Register(name: any, handler: any)
 	if type(name) ~= "string" or name == "" then
 		error("MrDialogue.RegisterAction requires a non-empty name", 3)
 	end
+	if utf8.len(name) == nil then
+		error("MrDialogue.RegisterAction name must contain valid UTF-8", 3)
+	end
+	if #name > Net.Limits.maxIdBytes then
+		error(`MrDialogue.RegisterAction name must not exceed {Net.Limits.maxIdBytes} bytes`, 3)
+	end
 	if type(handler) ~= "function" then
 		error("MrDialogue.RegisterAction requires a function", 3)
 	end
@@ -30,7 +37,6 @@ function Actions._isRegistered(name: string): boolean
 	return handlers[name] ~= nil
 end
 
--- The coroutine lets us reject accidental yields instead of hanging the session.
 function Actions._execute(spec: Types.ActionSpec, context: Types.DialogueContext): ExecutionResult
 	local handler = handlers[spec.name]
 	if not handler then

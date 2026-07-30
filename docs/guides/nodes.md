@@ -76,13 +76,17 @@ Each option contains:
 
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
-| `id` | `string` | Yes | Stable identifier unique within this node |
+| `id` | `string` | Yes | Authoring identifier unique within this node |
 | `text` | `string` | Yes | Text displayed to the player |
 | `next` | `string` | Yes | Target node ID |
 | `condition` | `ConditionSpec?` | No | Server condition controlling availability |
 
 The client receives only option text and a temporary index. IDs, conditions, and
 targets stay on the server.
+
+In 1.0, option IDs are validation and authoring metadata; runtime selection uses the
+temporary index. The bundled adapter prefixes displayed text with that index and
+removes an existing leading numeric prefix to avoid duplication.
 
 If no options remain and there is no `fallback`, the session is cancelled with
 `reason = "no_available_options"`.
@@ -147,5 +151,6 @@ accepted = {
 | `type` | `"end"` | Yes | Node discriminator |
 | `result` | `string?` | No | Application-defined completion result |
 
-Results have no built-in meaning. Read them with `Session:GetOutcome()` or handle them
-in a custom adapter's `OnEnd`.
+Results have no built-in meaning. Read them with `Session:GetOutcome()` or
+`Session.Ended`. A custom adapter receives them in `OnEnd` when the session opened a
+client presentation.

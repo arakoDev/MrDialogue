@@ -22,7 +22,7 @@ Workspace
 ```luau title="Dialogue.server.luau"
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Server)
 
 local prompt = script.Parent
 local npc = prompt:FindFirstAncestorOfClass("Model")

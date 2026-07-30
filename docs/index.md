@@ -25,7 +25,7 @@ Add MrDialogue to `wally.toml`:
 
 ```toml
 [dependencies]
-MrDialogue = "arakodev/mrdialogue@0.1.2"
+MrDialogue = "arakodev/mrdialogue@1.0.0"
 ```
 
 Then run `wally install` and map the package into `ReplicatedStorage`.
@@ -42,7 +42,7 @@ Create a `LocalScript` under `StarterPlayerScripts`:
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Client)
 
 MrDialogue.Start()
 ```
@@ -54,7 +54,7 @@ Create a server `Script` under a `ProximityPrompt`:
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Server)
 
 local dialogue = MrDialogue.new({
 	format = 1,

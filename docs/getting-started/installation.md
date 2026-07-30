@@ -9,7 +9,7 @@ Add MrDialogue to the `[dependencies]` section of your `wally.toml`:
 
 ```toml
 [dependencies]
-MrDialogue = "arakodev/mrdialogue@0.1.2"
+MrDialogue = "arakodev/mrdialogue@1.0.0"
 ```
 
 Install the dependency:
@@ -40,6 +40,20 @@ project mapping looks like this:
     Do not install MrDialogue as a server-only dependency. The server API owns
     dialogue state, while the client API owns presentation and player input.
 
+## Start the server
+
+Create a `Script` under `ServerScriptService` so the versioned dialogue remote is
+available before clients start:
+
+```luau title="ServerScriptService/DialogueServer.server.luau"
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+require(ReplicatedStorage.Packages.MrDialogue.Server)
+```
+
+Requiring the server module once initializes networking. Dialogue scripts can require
+the same module again; Roblox returns the cached module.
+
 ## Start the client
 
 Create a `LocalScript` under `StarterPlayerScripts`:
@@ -47,7 +61,7 @@ Create a `LocalScript` under `StarterPlayerScripts`:
 ```luau title="StarterPlayerScripts/DialogueClient.client.luau"
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Client)
 
 MrDialogue.Start()
 ```
@@ -60,7 +74,8 @@ player is ready for dialogues. Calling it again returns the same client runtime.
     `Dialogue:Start()` returns `"player dialogue client is not ready"` until the
     player's client runtime has connected. Starting the runtime from
     `StarterPlayerScripts` normally makes it ready before the player can trigger an
-    NPC prompt.
+    NPC prompt. Client startup raises a clear timeout error if the server module was
+    not initialized within 10 seconds.
 
 ## Verify the installation
 
@@ -71,11 +86,12 @@ ReplicatedStorage
 ├── Packages
 │   └── MrDialogue
 └── MrDialogueRuntime
-    └── DialogueRemote
+    └── DialogueRemoteV1
 ```
 
 `MrDialogueRuntime` is created by the server automatically. Do not create or send
-messages through its remote manually.
+messages through its remote manually. MrDialogue rejects duplicate server package
+copies instead of allowing independent session registries to share this remote.
 
 ## Next step
 

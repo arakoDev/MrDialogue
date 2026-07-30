@@ -1,0 +1,30 @@
+{
+  "name": "MrDialogueTests",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "MrDialogue": {
+        "$path": "src"
+      }
+    },
+
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "MrDialogueTest": {
+        "$path": "tests/server.server.luau"
+      }
+    },
+
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "MrDialogueTest": {
+          "$path": "tests/client.client.luau"
+        }
+      }
+    }
+  }
+}

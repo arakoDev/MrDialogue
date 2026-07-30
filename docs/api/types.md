@@ -1,8 +1,9 @@
 # Types
 
-MrDialogue exports its public types from the same module as its runtime API.
-The server and client receive different APIs, so use type imports in code that
-runs in the matching context.
+MrDialogue exports public types from its realm-specific runtime modules. Require
+`MrDialogue.Server` from server code and `MrDialogue.Client` from client code for
+complete inference and autocomplete. The package root remains an untyped compatibility
+entry point.
 
 ## Dialogue definition
 
@@ -126,6 +127,7 @@ Arguments from a spec are unpacked after `context`.
 export type SessionOptions = {
 	npc: Instance?,
 	data: { [string]: any }?,
+	timeoutSeconds: number?,
 }
 
 export type SessionOutcome = {
@@ -137,6 +139,7 @@ export type SessionOutcome = {
 export type Session = {
 	Player: Player,
 	DialogueId: string,
+	Ended: RBXScriptSignal,
 	IsActive: (self: Session) -> boolean,
 	GetOutcome: (self: Session) -> SessionOutcome?,
 	Cancel: (self: Session, reason: string?) -> boolean,
@@ -197,6 +200,11 @@ export type Adapter = {
 Adapter action callbacks are scoped to the state that created them. Calling a
 stale callback does nothing.
 
+Adapter callbacks must finish synchronously. If a callback before `OnEnd` throws or
+yields, the client cleans up locally, reports `client_error` to the server, and
+invokes `OnEnd` once with `authoritative = false`. A failure inside `OnEnd` is logged
+and contained without recursively invoking it.
+
 ## Client configuration
 
 ```luau
@@ -218,6 +226,18 @@ export type TypewriterConfig = {
 
 export type TypewriterCompletionOutcome =
 	"natural" | "skipped" | "cancelled"
+```
+
+Both realm APIs expose:
+
+```luau
+Version: string
+ProtocolVersion: number
+Limits: {
+	maxIdBytes: number,
+	maxTextBytes: number,
+	maxChoices: number,
+}
 ```
 
 [:octicons-code-16: Server type source](https://github.com/arakoDev/MrDialogue/blob/main/src/Types.luau)

@@ -12,12 +12,14 @@ local TypewriterClass = require(script.Parent.Typewriter)
 local DefaultAdapter = {}
 DefaultAdapter.__index = DefaultAdapter
 
-export type Config = {
+export type DefaultAdapterConfig = {
 	gui: ScreenGui?,
 	charsPerSecond: number?,
 	punctuationPause: number?,
 	freezeCharacter: boolean?,
 }
+
+export type Config = DefaultAdapterConfig
 
 export type DefaultAdapter = ClientRuntimeClass.Adapter & {
 	Destroy: (self: DefaultAdapter) -> boolean,
@@ -103,10 +105,21 @@ local function isNonNegativeNumber(value: any): boolean
 	return type(value) == "number" and isFinite(value) and value >= 0
 end
 
+local function getLiveState(self: DefaultAdapter, methodName: string): DefaultAdapterState
+	local state = states[self]
+	if not state or state.destroyed then
+		error(
+			`[MrDialogue][DEFAULT_ADAPTER_DESTROYED] DefaultAdapter:{methodName} cannot be called after Destroy`,
+			3
+		)
+	end
+	return state
+end
+
 local function resolveGui(explicitGui: ScreenGui?): ScreenGui
 	local player = Players.LocalPlayer
 	if not player then
-		error("MrDialogue.DefaultAdapter requires a LocalPlayer", 3)
+		error("MrDialogue.DefaultAdapter.new requires a LocalPlayer", 3)
 	end
 
 	local playerGui = player:WaitForChild("PlayerGui")
@@ -120,7 +133,10 @@ local function resolveGui(explicitGui: ScreenGui?): ScreenGui
 	local existing = playerGui:FindFirstChild("DialogueGui")
 	if existing then
 		if not existing:IsA("ScreenGui") then
-			error("PlayerGui.DialogueGui must be a ScreenGui", 3)
+			error(
+				"MrDialogue.DefaultAdapter.new expected PlayerGui.DialogueGui to be a ScreenGui",
+				3
+			)
 		end
 		return existing
 	end
@@ -128,7 +144,7 @@ local function resolveGui(explicitGui: ScreenGui?): ScreenGui
 	local assets = script.Parent:FindFirstChild("Assets")
 	local template = if assets then assets:FindFirstChild("DialogueGui") else nil
 	if not template or not template:IsA("ScreenGui") then
-		error("MrDialogue.Assets.DialogueGui is missing", 3)
+		error("MrDialogue.DefaultAdapter.new could not find MrDialogue.Assets.DialogueGui", 3)
 	end
 
 	local gui = template:Clone()
@@ -176,7 +192,13 @@ local function validateGui(gui: ScreenGui): GuiReferences
 	end
 
 	if #issues > 0 then
-		error(`Invalid DialogueGui:\n- {table.concat(issues, "\n- ")}`, 3)
+		error(
+			`MrDialogue.DefaultAdapter.new received an invalid DialogueGui:\n- {table.concat(
+				issues,
+				"\n- "
+			)}`,
+			3
+		)
 	end
 
 	return {
@@ -237,7 +259,6 @@ local function slideOut(slide: Slide, completed: () -> ())
 		TweenService:Create(slide.frame, DISAPPEAR_TWEEN_INFO, { Position = slide.hidden })
 	slide.tween = tween
 	tween.Completed:Once(function(playbackState)
-		-- Ignore completion from a tween that was replaced.
 		if slide.tween ~= tween or playbackState ~= Enum.PlaybackState.Completed then
 			return
 		end
@@ -256,13 +277,7 @@ local function setContinueEnabled(state: DefaultAdapterState, enabled: boolean)
 	state.continueButton.Selectable = enabled
 end
 
-local function restoreCharacterMovement(state: DefaultAdapterState)
-	local characterChildAddedConnection = state.characterChildAddedConnection
-	if characterChildAddedConnection then
-		characterChildAddedConnection:Disconnect()
-		state.characterChildAddedConnection = nil
-	end
-
+local function restoreFrozenHumanoid(state: DefaultAdapterState)
 	local humanoid = state.frozenHumanoid
 	local originalWalkSpeed = state.originalWalkSpeed
 	local originalJumpHeight = state.originalJumpHeight
@@ -274,20 +289,31 @@ local function restoreCharacterMovement(state: DefaultAdapterState)
 	state.originalJumpPower = nil
 
 	if humanoid and humanoid.Parent then
-		if originalWalkSpeed ~= nil then
+		-- Preserve movement values written by another system.
+		if originalWalkSpeed ~= nil and humanoid.WalkSpeed == 0 then
 			humanoid.WalkSpeed = originalWalkSpeed
 		end
-		if originalJumpHeight ~= nil then
+		if originalJumpHeight ~= nil and humanoid.JumpHeight == 0 then
 			humanoid.JumpHeight = originalJumpHeight
 		end
-		if originalJumpPower ~= nil then
+		if originalJumpPower ~= nil and humanoid.JumpPower == 0 then
 			humanoid.JumpPower = originalJumpPower
 		end
 	end
 end
 
+local function restoreCharacterMovement(state: DefaultAdapterState)
+	local characterChildAddedConnection = state.characterChildAddedConnection
+	if characterChildAddedConnection then
+		characterChildAddedConnection:Disconnect()
+		state.characterChildAddedConnection = nil
+	end
+
+	restoreFrozenHumanoid(state)
+end
+
 local function freezeHumanoid(state: DefaultAdapterState, humanoid: Humanoid)
-	restoreCharacterMovement(state)
+	restoreFrozenHumanoid(state)
 	if not state.freezeActive or not state.freezeCharacter then
 		return
 	end
@@ -313,12 +339,6 @@ local function freezeCharacterMovement(state: DefaultAdapterState)
 		return
 	end
 
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		freezeHumanoid(state, humanoid)
-		return
-	end
-
 	local connection: RBXScriptConnection?
 	connection = character.ChildAdded:Connect(function(child)
 		if state.characterChildAddedConnection ~= connection then
@@ -328,16 +348,16 @@ local function freezeCharacterMovement(state: DefaultAdapterState)
 			return
 		end
 
-		if connection then
-			connection:Disconnect()
-		end
-		state.characterChildAddedConnection = nil
-
 		if state.freezeActive and state.freezeCharacter and player.Character == character then
 			freezeHumanoid(state, child)
 		end
 	end)
 	state.characterChildAddedConnection = connection
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		freezeHumanoid(state, humanoid)
+	end
 end
 
 local function clearDialogueSelection(state: DefaultAdapterState)
@@ -347,7 +367,6 @@ local function clearDialogueSelection(state: DefaultAdapterState)
 	end
 end
 
--- Keep gamepad selection on the active dialogue control.
 local function updateDialogueSelection(state: DefaultAdapterState)
 	if not state.gui.Enabled or UserInputService.PreferredInput ~= Enum.PreferredInput.Gamepad then
 		clearDialogueSelection(state)
@@ -394,7 +413,6 @@ local function activateContinue(state: DefaultAdapterState)
 	local action = state.continueAction
 	setContinueMode(state, "DISABLED", nil)
 
-	-- Revealing and advancing are separate clicks.
 	if mode == "TYPING" then
 		state.typewriter:Skip()
 	elseif action then
@@ -455,14 +473,15 @@ local function releaseOptions(state: DefaultAdapterState)
 	table.clear(state.optionBindings)
 end
 
--- Keep locked buttons around until the slide-out finishes.
 local function clearOptions(state: DefaultAdapterState, animate: boolean?)
 	lockOptions(state)
 
 	if animate and state.optionsPanel.Visible then
 		slideOut(state.optionsSlide, function()
 			releaseOptions(state)
-			updateDialogueSelection(state)
+			if not state.destroyed then
+				updateDialogueSelection(state)
+			end
 		end)
 	else
 		resetSlide(state.optionsSlide)
@@ -504,7 +523,7 @@ local function resetPresentation(state: DefaultAdapterState)
 	state.typewriter:Cancel()
 end
 
-function DefaultAdapter.new(config: Config?): DefaultAdapter
+function DefaultAdapter.new(config: DefaultAdapterConfig?): DefaultAdapter
 	if config ~= nil and type(config) ~= "table" then
 		error("MrDialogue.DefaultAdapter.new config must be a table", 2)
 	end
@@ -602,6 +621,10 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 	table.insert(
 		state.connections,
 		state.typewriter.Completed:Connect(function(runId, outcome)
+			if state.destroyed then
+				return
+			end
+
 			local presentationCompleted = state.presentationCompleted
 			if
 				state.currentRunId ~= runId
@@ -621,7 +644,10 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 	table.insert(
 		state.connections,
 		state.continueButton.Activated:Connect(function(input)
-			-- Leave Space to character controls when movement is not frozen.
+			if state.destroyed then
+				return
+			end
+
 			if input.KeyCode == Enum.KeyCode.Space and not state.freezeCharacter then
 				return
 			end
@@ -633,7 +659,8 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		state.connections,
 		UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
 			if
-				gameProcessedEvent
+				state.destroyed
+				or gameProcessedEvent
 				or not state.gui.Enabled
 				or UserInputService:GetFocusedTextBox() ~= nil
 			then
@@ -662,7 +689,9 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 	table.insert(
 		state.connections,
 		UserInputService:GetPropertyChangedSignal("PreferredInput"):Connect(function()
-			updateDialogueSelection(state)
+			if not state.destroyed then
+				updateDialogueSelection(state)
+			end
 		end)
 	)
 
@@ -671,7 +700,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 		table.insert(
 			state.connections,
 			player.CharacterAdded:Connect(function()
-				if state.freezeActive then
+				if not state.destroyed and state.freezeActive then
 					freezeCharacterMovement(state)
 				end
 			end)
@@ -682,7 +711,7 @@ function DefaultAdapter.new(config: Config?): DefaultAdapter
 end
 
 function DefaultAdapter.OnShow(self: DefaultAdapter, info: ClientRuntimeClass.ShowInfo)
-	local state = states[self]
+	local state = getLiveState(self, "OnShow")
 	state.freezeCharacter = if info.freezeCharacter ~= nil
 		then info.freezeCharacter
 		else state.defaultFreezeCharacter
@@ -706,7 +735,7 @@ function DefaultAdapter.OnPresentation(
 	presentation: ClientRuntimeClass.PresentationInfo,
 	actions: ClientRuntimeClass.PresentationActions
 )
-	local state = states[self]
+	local state = getLiveState(self, "OnPresentation")
 	resetPresentation(state)
 	clearOptions(state, true)
 	applySpeaker(state, presentation.speaker)
@@ -721,22 +750,28 @@ function DefaultAdapter.OnAdvanceReady(
 	self: DefaultAdapter,
 	actions: ClientRuntimeClass.AdvanceActions
 )
-	setContinueMode(states[self], "ADVANCE", actions.advance)
+	setContinueMode(getLiveState(self, "OnAdvanceReady"), "ADVANCE", actions.advance)
 end
 
 function DefaultAdapter.OnFinishReady(
 	self: DefaultAdapter,
 	actions: ClientRuntimeClass.FinishActions
 )
-	setContinueMode(states[self], "FINISH", actions.finish)
+	setContinueMode(getLiveState(self, "OnFinishReady"), "FINISH", actions.finish)
 end
 
 function DefaultAdapter.OnChoices(
 	self: DefaultAdapter,
-	options: { Net.ChoiceOptionPayload },
+	options: { ClientRuntimeClass.ChoiceInfo },
 	actions: ClientRuntimeClass.ChoiceActions
 )
-	local state = states[self]
+	local state = getLiveState(self, "OnChoices")
+	if #options < 1 or #options > Net.Limits.maxChoices then
+		error(
+			`[MrDialogue][DEFAULT_ADAPTER_INVALID_CHOICES] OnChoices requires 1 to {Net.Limits.maxChoices} options`,
+			2
+		)
+	end
 	resetPresentation(state)
 	clearOptions(state)
 	state.choiceLocked = false
@@ -763,7 +798,6 @@ function DefaultAdapter.OnChoices(
 		})
 	end
 
-	-- Wrap the gamepad selection around the list so it never dead-ends.
 	local optionCount = #state.optionBindings
 	for index, binding in ipairs(state.optionBindings) do
 		local previousIndex = if index == 1 then optionCount else index - 1
@@ -778,6 +812,10 @@ end
 
 function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass.EndOutcome)
 	local state = states[self]
+	if not state or state.destroyed then
+		return
+	end
+
 	state.freezeActive = false
 	restoreCharacterMovement(state)
 	resetPresentation(state)
@@ -785,6 +823,9 @@ function DefaultAdapter.OnEnd(self: DefaultAdapter, _outcome: ClientRuntimeClass
 	clearDialogueSelection(state)
 
 	slideOut(state.dialogueSlide, function()
+		if state.destroyed then
+			return
+		end
 		clearSpeaker(state)
 		state.dialogueLabel.Text = ""
 		state.dialogueLabel.MaxVisibleGraphemes = -1

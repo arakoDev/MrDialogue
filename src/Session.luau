@@ -26,7 +26,9 @@ type SessionState = {
 	currentNodeId: string,
 	npc: Instance?,
 	data: { [string]: any },
+	endedEvent: BindableEvent,
 	active: boolean,
+	clientId: string,
 	sessionId: string,
 	phase: SessionPhase,
 	expectedTurn: string?,
@@ -35,6 +37,8 @@ type SessionState = {
 	pendingEndResult: string?,
 	clientStarted: boolean,
 	outcome: Types.SessionOutcome?,
+	timeoutSeconds: number,
+	timeoutThread: thread?,
 	characterAddedConnection: RBXScriptConnection?,
 	characterChildAddedConnection: RBXScriptConnection?,
 	humanoidDiedConnection: RBXScriptConnection?,
@@ -54,14 +58,28 @@ type ResolvedNode = {
 	prepared: PreparedNode?,
 }
 
--- Stands in for the end of an action node that has no next.
+type MessageRate = {
+	windowStartedAt: number,
+	count: number,
+	warned: boolean,
+}
+
 local IMPLICIT_END_NODE: Types.EndNode = {
 	type = "end",
 }
 
 local states: { [Session]: SessionState } = setmetatable({}, { __mode = "k" }) :: any
 local activeSessions: { [Player]: Session } = {}
-local clientReadyPlayers: { [Player]: boolean } = {}
+local clientReadyPlayers: { [Player]: string } = {}
+local messageRates: { [Player]: MessageRate } = {}
+
+local function safeToString(value: any): string
+	local result = table.pack(pcall(tostring, value))
+	if result[1] and type(result[2]) == "string" then
+		return result[2] :: string
+	end
+	return "<unprintable value>"
+end
 
 local function resolveSpeaker(
 	definition: Types.DialogueDefinition,
@@ -69,7 +87,6 @@ local function resolveSpeaker(
 ): Net.SpeakerPayload?
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
 	if type(speakerId) ~= "string" then
-		-- false explicitly selects narration.
 		return nil
 	end
 
@@ -132,7 +149,6 @@ local function prepareVisibleNode(
 	error(`node "{nodeId}" has nothing to present`, 2)
 end
 
--- Filter as late as possible so conditions use current game state.
 local function prepareChoiceOffer(
 	self: Session,
 	state: SessionState,
@@ -143,7 +159,11 @@ local function prepareChoiceOffer(
 	local context = makeContext(self, state)
 
 	for _, option in ipairs(node.options) do
-		if option.condition == nil or Conditions._evaluate(option.condition, context) then
+		local available = option.condition == nil or Conditions._evaluate(option.condition, context)
+		if not state.active then
+			return nil
+		end
+		if available then
 			table.insert(options, { text = option.text })
 			table.insert(offeredOptions, option)
 		end
@@ -173,13 +193,35 @@ local function applyPreparedNode(state: SessionState, prepared: PreparedNode)
 	state.pendingEndResult = nil
 end
 
-local function sendPreparedNode(self: Session, state: SessionState, prepared: PreparedNode)
+local function sendSessionMessage(self: Session, message: Net.ServerMessage): boolean
+	local sendResult = table.pack(pcall(Net._sendToClient, self.Player, message))
+	if sendResult[1] then
+		return true
+	end
+
+	warn(
+		`[MrDialogue][SERVER_NETWORK_SEND_FAILED] Could not send "{message.type}" for dialogue "{self.DialogueId}": {safeToString(
+			sendResult[2]
+		)}`
+	)
+	local outcome: Types.SessionOutcome = table.freeze({
+		status = "cancelled",
+		reason = "network_error",
+	}) :: any
+	Session._end(self, outcome, false)
+	return false
+end
+
+local function sendPreparedNode(self: Session, state: SessionState, prepared: PreparedNode): boolean
 	local presentation = prepared.presentation
 	local choices = prepared.choices
+	local sent = false
 
 	if presentation then
-		Net._sendToClient(self.Player, {
+		sent = sendSessionMessage(self, {
+			version = Net.PROTOCOL_VERSION,
 			type = "present",
+			clientId = state.clientId,
 			sessionId = state.sessionId,
 			turn = presentation.turn,
 			kind = presentation.kind,
@@ -187,18 +229,23 @@ local function sendPreparedNode(self: Session, state: SessionState, prepared: Pr
 			text = presentation.text,
 		})
 	elseif choices then
-		Net._sendToClient(self.Player, {
+		sent = sendSessionMessage(self, {
+			version = Net.PROTOCOL_VERSION,
 			type = "choices",
+			clientId = state.clientId,
 			sessionId = state.sessionId,
 			turn = choices.turn,
 			options = choices.options,
 		})
 	end
 
+	if not sent then
+		return false
+	end
 	applyPreparedNode(state, prepared)
+	return true
 end
 
--- Hold the next node until the player acknowledges the current line.
 local function sendReady(
 	self: Session,
 	state: SessionState,
@@ -206,20 +253,27 @@ local function sendReady(
 	interaction: "advance" | "finish",
 	pendingNodeId: string?,
 	pendingEndResult: string?
-)
+): boolean
 	local turn = HttpService:GenerateGUID(false)
-	Net._sendToClient(self.Player, {
-		type = "ready",
-		sessionId = state.sessionId,
-		turn = turn,
-		interaction = interaction,
-	})
+	if
+		not sendSessionMessage(self, {
+			version = Net.PROTOCOL_VERSION,
+			type = "ready",
+			clientId = state.clientId,
+			sessionId = state.sessionId,
+			turn = turn,
+			interaction = interaction,
+		})
+	then
+		return false
+	end
 
 	state.phase = phase
 	state.expectedTurn = turn
 	state.offeredOptions = nil
 	state.pendingNodeId = pendingNodeId
 	state.pendingEndResult = pendingEndResult
+	return true
 end
 
 local function beginResolving(state: SessionState)
@@ -236,7 +290,9 @@ local function sendOutcome(self: Session, state: SessionState, outcome: Types.Se
 	end
 
 	Net._sendToClient(self.Player, {
+		version = Net.PROTOCOL_VERSION,
 		type = "end",
+		clientId = state.clientId,
 		sessionId = state.sessionId,
 		status = outcome.status,
 		result = outcome.result,
@@ -244,20 +300,18 @@ local function sendOutcome(self: Session, state: SessionState, outcome: Types.Se
 	})
 end
 
-local function endSession(self: Session, state: SessionState, result: string?)
+local function endSession(self: Session, _state: SessionState, result: string?)
 	local outcome: Types.SessionOutcome = table.freeze({
 		status = "completed",
 		result = result,
 	}) :: any
 
-	if Session._end(self, outcome) then
-		sendOutcome(self, state, outcome)
-	end
+	Session._end(self, outcome, true)
 end
 
 local function cancelSession(
 	self: Session,
-	state: SessionState,
+	_state: SessionState,
 	reason: string,
 	notifyClient: boolean
 ): boolean
@@ -266,14 +320,36 @@ local function cancelSession(
 		reason = reason,
 	}) :: any
 
-	if not Session._end(self, outcome) then
-		return false
+	return Session._end(self, outcome, notifyClient)
+end
+
+local function clearSessionTimeout(state: SessionState)
+	local timeoutThread = state.timeoutThread
+	state.timeoutThread = nil
+	if timeoutThread then
+		task.cancel(timeoutThread)
 	end
-	if notifyClient then
-		sendOutcome(self, state, outcome)
+end
+
+local function armSessionTimeout(self: Session, state: SessionState)
+	clearSessionTimeout(state)
+	if not state.active then
+		return
 	end
 
-	return true
+	local timeoutThread: thread?
+	timeoutThread = task.delay(state.timeoutSeconds, function()
+		if not state.active or state.timeoutThread ~= timeoutThread then
+			return
+		end
+
+		state.timeoutThread = nil
+		warn(
+			`[MrDialogue][SESSION_TIMEOUT] Dialogue "{self.DialogueId}" timed out for {self.Player.Name}`
+		)
+		cancelSession(self, state, "timeout", true)
+	end)
+	state.timeoutThread = timeoutThread
 end
 
 local function disconnectCharacterDeathMonitoring(state: SessionState)
@@ -315,7 +391,6 @@ local function monitorCharacterDeath(self: Session, state: SessionState, charact
 			end
 		end)
 
-		-- The humanoid may already be dead when monitoring begins.
 		if humanoid.Health <= 0 and state.active and self.Player.Character == character then
 			cancelSession(self, state, "death", true)
 		end
@@ -363,7 +438,6 @@ local function cancelWithoutOptions(self: Session, state: SessionState, nodeId: 
 	cancelSession(self, state, "no_available_options", true)
 end
 
--- Walk silent nodes until there is something to show. Look-ahead stops before running actions.
 local function resolveNode(
 	self: Session,
 	state: SessionState,
@@ -372,8 +446,18 @@ local function resolveNode(
 ): ResolvedNode?
 	local nodeId = initialNodeId
 	local visited: { [string]: boolean } = {}
+	local steps = 0
 
 	while true do
+		steps += 1
+		if steps > Net.Limits.maxSilentSteps then
+			warn(
+				`[MrDialogue][RESOLUTION_LIMIT] Dialogue "{self.DialogueId}" exceeded {Net.Limits.maxSilentSteps} silent resolution steps`
+			)
+			cancelSession(self, state, "resolution_error", true)
+			return nil
+		end
+
 		if visited[nodeId] then
 			warn(
 				`[MrDialogue][RESOLUTION_CYCLE] Dialogue "{self.DialogueId}" looped back to node "{nodeId}" without presenting anything`
@@ -386,9 +470,15 @@ local function resolveNode(
 		local node = state.definition.nodes[nodeId]
 		if node.type == "branch" then
 			local passed = Conditions._evaluate(node.condition, makeContext(self, state))
+			if not state.active then
+				return nil
+			end
 			nodeId = if passed then node.onTrue else node.onFalse
 		elseif node.type == "choice" and node.text == nil then
 			local prepared = prepareChoiceOffer(self, state, node)
+			if not state.active then
+				return nil
+			end
 			if prepared then
 				return { nodeId = nodeId, node = node, prepared = prepared }
 			end
@@ -409,7 +499,7 @@ local function resolveNode(
 			end
 			if not result.success then
 				warn(
-					`[MrDialogue][{result.code}] Action "{node.action.name}" failed: {tostring(
+					`[MrDialogue][{result.code}] Action "{node.action.name}" failed: {safeToString(
 						result.details
 					)}`
 				)
@@ -427,7 +517,6 @@ local function resolveNode(
 	end
 end
 
--- Starts and accepted choices show the next visible node immediately.
 local function moveToNode(self: Session, state: SessionState, nodeId: string)
 	local resolved = resolveNode(self, state, nodeId, true)
 	if not resolved then
@@ -447,7 +536,6 @@ local function moveToNode(self: Session, state: SessionState, nodeId: string)
 	)
 end
 
--- After a line, wait for another click before showing the next visible node.
 local function prepareFollowingInteraction(self: Session, state: SessionState, nodeId: string)
 	local resolved = resolveNode(self, state, nodeId, false)
 	if not resolved then
@@ -455,12 +543,13 @@ local function prepareFollowingInteraction(self: Session, state: SessionState, n
 	end
 
 	if resolved.node.type == "end" then
-		sendReady(self, state, "READY_TO_FINISH", "finish", resolved.nodeId, resolved.node.result)
+		sendReady(self, state, "READY_TO_FINISH", "finish", nodeId, nil)
 	elseif resolved.prepared then
-		sendPreparedNode(self, state, resolved.prepared)
-		state.currentNodeId = resolved.nodeId
+		if sendPreparedNode(self, state, resolved.prepared) then
+			state.currentNodeId = resolved.nodeId
+		end
 	else
-		sendReady(self, state, "READY_TO_ADVANCE", "advance", resolved.nodeId, nil)
+		sendReady(self, state, "READY_TO_ADVANCE", "advance", nodeId, nil)
 	end
 end
 
@@ -471,13 +560,60 @@ local function offerChoices(
 	node: Types.ChoiceNode
 )
 	local prepared = prepareChoiceOffer(self, state, node)
+	if not state.active then
+		return
+	end
 	if prepared then
-		sendPreparedNode(self, state, prepared)
-		state.currentNodeId = nodeId
+		if sendPreparedNode(self, state, prepared) then
+			state.currentNodeId = nodeId
+		end
 	elseif node.fallback then
 		prepareFollowingInteraction(self, state, node.fallback)
 	else
 		cancelWithoutOptions(self, state, nodeId)
+	end
+end
+
+local function isFinite(value: number): boolean
+	return value == value and value ~= math.huge and value ~= -math.huge
+end
+
+function Session._validateStartArguments(player: any, options: any)
+	if typeof(player) ~= "Instance" then
+		error("Dialogue:Start requires a Player", 3)
+	end
+
+	local playerInstance = player :: Instance
+	if not playerInstance:IsA("Player") then
+		error("Dialogue:Start requires a Player", 3)
+	end
+
+	if options ~= nil and type(options) ~= "table" then
+		error("Dialogue:Start options must be a table", 3)
+	end
+
+	if options and options.npc ~= nil and typeof(options.npc) ~= "Instance" then
+		error("Dialogue:Start options.npc must be an Instance", 3)
+	end
+
+	if options and options.data ~= nil and type(options.data) ~= "table" then
+		error("Dialogue:Start options.data must be a table", 3)
+	end
+
+	local timeoutSeconds = if options then options.timeoutSeconds else nil
+	if
+		timeoutSeconds ~= nil
+		and (
+			type(timeoutSeconds) ~= "number"
+			or not isFinite(timeoutSeconds)
+			or timeoutSeconds <= 0
+			or timeoutSeconds > Net.Limits.maxSessionTimeoutSeconds
+		)
+	then
+		error(
+			`Dialogue:Start options.timeoutSeconds must be a positive number no greater than {Net.Limits.maxSessionTimeoutSeconds}`,
+			3
+		)
 	end
 end
 
@@ -487,22 +623,12 @@ function Session.new(
 	definition: Types.DialogueDefinition,
 	options: Types.SessionOptions?
 ): (Session?, string?)
-	if typeof(player) ~= "Instance" or not player:IsA("Player") then
-		error("Dialogue:Start requires a Player", 3)
-	end
-	if options ~= nil and type(options) ~= "table" then
-		error("Dialogue:Start options must be a table", 3)
-	end
-	if options and options.npc ~= nil and typeof(options.npc) ~= "Instance" then
-		error("Dialogue:Start options.npc must be an Instance", 3)
-	end
-	if options and options.data ~= nil and type(options.data) ~= "table" then
-		error("Dialogue:Start options.data must be a table", 3)
-	end
+	Session._validateStartArguments(player, options)
 	if player.Parent ~= Players then
 		return nil, "player is not connected"
 	end
-	if not clientReadyPlayers[player] then
+	local clientId = clientReadyPlayers[player]
+	if not clientId then
 		return nil, "player dialogue client is not ready"
 	end
 
@@ -512,25 +638,33 @@ function Session.new(
 	end
 
 	local sessionId = HttpService:GenerateGUID(false)
+	local endedEvent = Instance.new("BindableEvent")
 	local self = setmetatable({
 		Player = player,
 		DialogueId = dialogueId,
+		Ended = endedEvent.Event,
 	}, Session) :: any
 	local state: SessionState = {
 		definition = definition,
 		currentNodeId = definition.entry,
 		npc = if options then options.npc else nil,
 		data = if options and options.data then table.clone(options.data) else {},
+		endedEvent = endedEvent,
 		active = true,
+		clientId = clientId,
 		sessionId = sessionId,
 		phase = "RESOLVING",
 		clientStarted = false,
+		timeoutSeconds = if options and options.timeoutSeconds
+			then options.timeoutSeconds
+			else Net.Limits.sessionTimeoutSeconds,
+		timeoutThread = nil,
 	}
 	states[self] = state
 	activeSessions[player] = self
 
 	local initial = resolveNode(self, state, definition.entry, true)
-	if not initial then
+	if not initial or not state.active then
 		return table.freeze(self) :: Session, nil
 	end
 
@@ -542,16 +676,29 @@ function Session.new(
 
 	local prepared = initial.prepared or prepareVisibleNode(definition, initial.nodeId)
 	applyPreparedNode(state, prepared)
-	Net._sendToClient(player, {
+	local startMessage: Net.StartMessage = {
+		version = Net.PROTOCOL_VERSION,
 		type = "start",
+		clientId = clientId,
 		sessionId = sessionId,
 		dialogueId = dialogueId,
 		freezeCharacter = definition.freezeCharacter,
 		presentation = prepared.presentation,
 		choices = prepared.choices,
-	})
+	}
+	local sendResult = table.pack(pcall(Net._sendToClient, player, startMessage))
+	if not sendResult[1] then
+		warn(
+			`[MrDialogue][SERVER_NETWORK_SEND_FAILED] Could not start dialogue "{dialogueId}" for {player.Name}: {safeToString(
+				sendResult[2]
+			)}`
+		)
+		cancelSession(self, state, "network_error", false)
+		return table.freeze(self) :: Session, nil
+	end
 	state.clientStarted = true
 	beginDeathMonitoring(self, state)
+	armSessionTimeout(self, state)
 
 	return table.freeze(self) :: Session, nil
 end
@@ -570,9 +717,13 @@ function Session.Cancel(self: Session, reason: any): boolean
 	local cancelReason = if reason == nil then "manual" else reason
 	if
 		type(cancelReason) ~= "string"
+		or #cancelReason > Net.Limits.maxReasonBytes
 		or (cancelReason ~= "manual" and string.match(cancelReason, "^[%w_%-]+:[%w_.%-]+$") == nil)
 	then
-		error('Session:Cancel reason must be "manual" or a namespaced string', 2)
+		error(
+			`Session:Cancel reason must be "manual" or a namespaced string no longer than {Net.Limits.maxReasonBytes} bytes`,
+			2
+		)
 	end
 
 	local state = states[self]
@@ -583,14 +734,17 @@ function Session.Cancel(self: Session, reason: any): boolean
 	return cancelSession(self, state, cancelReason, true)
 end
 
--- Each server message accepts one reply with the matching turn token.
 local function isExpectedTurn(state: SessionState, turn: any): boolean
 	return state.expectedTurn ~= nil and state.expectedTurn == turn
 end
 
-local function handlePresentationCompleted(self: Session, state: SessionState, message: any)
+local function handlePresentationCompleted(
+	self: Session,
+	state: SessionState,
+	message: any
+): boolean
 	if state.phase ~= "WAITING_PRESENTATION" or not isExpectedTurn(state, message.turn) then
-		return
+		return false
 	end
 
 	local nodeId = state.currentNodeId
@@ -606,14 +760,16 @@ local function handlePresentationCompleted(self: Session, state: SessionState, m
 	elseif node.type == "choice" then
 		offerChoices(self, state, nodeId, node)
 	end
+
+	return true
 end
 
-local function handleAdvance(self: Session, state: SessionState, message: any)
+local function handleAdvance(self: Session, state: SessionState, message: any): boolean
 	if
 		(state.phase ~= "READY_TO_ADVANCE" and state.phase ~= "READY_TO_FINISH")
 		or not isExpectedTurn(state, message.turn)
 	then
-		return
+		return false
 	end
 
 	local finishing = state.phase == "READY_TO_FINISH"
@@ -623,61 +779,143 @@ local function handleAdvance(self: Session, state: SessionState, message: any)
 
 	if finishing then
 		if pendingNodeId then
-			state.currentNodeId = pendingNodeId
+			moveToNode(self, state, pendingNodeId)
+		else
+			endSession(self, state, pendingEndResult)
 		end
-		endSession(self, state, pendingEndResult)
 	elseif pendingNodeId then
 		moveToNode(self, state, pendingNodeId)
 	end
+
+	return true
 end
 
-local function handleChoose(self: Session, state: SessionState, message: any)
+local function handleChoose(self: Session, state: SessionState, message: any): boolean
 	if state.phase ~= "WAITING_CHOICE" or not isExpectedTurn(state, message.turn) then
-		return
+		return false
 	end
 
-	-- Resolve the index against the exact filtered offer sent to this client.
 	local offeredOptions = state.offeredOptions
 	local index = message.index
 	if type(index) ~= "number" or index % 1 ~= 0 or index < 1 then
-		return
+		return false
 	end
 
 	local option = if offeredOptions then offeredOptions[index] else nil
 	if not option then
-		return
+		return false
 	end
 
 	local nodeId = state.currentNodeId
 	beginResolving(state)
 
-	if
-		option.condition and not Conditions._evaluate(option.condition, makeContext(self, state))
-	then
-		-- The option changed while it was visible; send a fresh offer.
+	local stillAvailable = option.condition == nil
+		or Conditions._evaluate(option.condition, makeContext(self, state))
+	if not state.active then
+		return true
+	end
+
+	if not stillAvailable then
 		local node = state.definition.nodes[nodeId]
 		if node.type == "choice" then
 			offerChoices(self, state, nodeId, node)
 		end
-		return
+		return true
 	end
 
 	moveToNode(self, state, option.next)
+	return true
+end
+
+local function isBoundedString(value: any, maximumBytes: number): boolean
+	return type(value) == "string"
+		and value ~= ""
+		and #value <= maximumBytes
+		and utf8.len(value) ~= nil
+end
+
+local function isRateLimited(player: Player): boolean
+	local now = os.clock()
+	local existingRate = messageRates[player]
+	local rate: MessageRate
+	if
+		not existingRate
+		or now - existingRate.windowStartedAt >= Net.Limits.messageWindowSeconds
+	then
+		rate = {
+			windowStartedAt = now,
+			count = 0,
+			warned = false,
+		}
+		messageRates[player] = rate
+	else
+		rate = existingRate
+	end
+
+	rate.count += 1
+	if rate.count <= Net.Limits.maxMessagesPerWindow then
+		return false
+	end
+
+	if not rate.warned then
+		rate.warned = true
+		warn(
+			`[MrDialogue][CLIENT_RATE_LIMITED] Ignoring excessive dialogue messages from {player.Name}`
+		)
+	end
+
+	local self = activeSessions[player]
+	local state = if self then states[self] else nil
+	if self and state and state.active then
+		cancelSession(self, state, "rate_limited", true)
+	end
+
+	return true
 end
 
 local function handleClientMessage(player: Player, message: any)
+	if isRateLimited(player) then
+		return
+	end
 	if type(message) ~= "table" then
+		return
+	end
+	if
+		message.version ~= Net.PROTOCOL_VERSION
+		or not isBoundedString(message.type, Net.Limits.maxIdBytes)
+		or not isBoundedString(message.clientId, Net.Limits.maxIdBytes)
+	then
 		return
 	end
 
 	if message.type == "client_ready" then
-		clientReadyPlayers[player] = true
+		local clientId = message.clientId
+		if clientReadyPlayers[player] == clientId then
+			return
+		end
+
+		-- End the stale runtime before listeners can start another session.
+		clientReadyPlayers[player] = clientId
+		local existingSession = activeSessions[player]
+		local existingState = if existingSession then states[existingSession] else nil
+		if existingSession and existingState and existingState.active then
+			cancelSession(existingSession, existingState, "client_restarted", true)
+		end
 		return
 	elseif message.type == "client_stopped" then
+		if clientReadyPlayers[player] ~= message.clientId then
+			return
+		end
+
 		clientReadyPlayers[player] = nil
 		local stoppedSession = activeSessions[player]
 		local stoppedState = if stoppedSession then states[stoppedSession] else nil
-		if stoppedSession and stoppedState and stoppedState.active then
+		if
+			stoppedSession
+			and stoppedState
+			and stoppedState.active
+			and stoppedState.clientId == message.clientId
+		then
 			cancelSession(stoppedSession, stoppedState, "client_cancelled", true)
 		end
 		return
@@ -685,23 +923,44 @@ local function handleClientMessage(player: Player, message: any)
 
 	local self = activeSessions[player]
 	local state = if self then states[self] else nil
-	if not self or not state or not state.active or message.sessionId ~= state.sessionId then
+	if
+		not self
+		or not state
+		or not state.active
+		or message.clientId ~= state.clientId
+		or not isBoundedString(message.sessionId, Net.Limits.maxIdBytes)
+		or message.sessionId ~= state.sessionId
+	then
 		return
 	end
 
+	local accepted = false
 	if message.type == "cancel" then
+		accepted = true
 		cancelSession(self, state, "client_cancelled", true)
+	elseif message.type == "client_error" then
+		accepted = true
+		cancelSession(self, state, "client_error", true)
 	elseif message.type == "presentation_completed" then
-		handlePresentationCompleted(self, state, message)
+		if isBoundedString(message.turn, Net.Limits.maxIdBytes) then
+			accepted = handlePresentationCompleted(self, state, message)
+		end
 	elseif message.type == "advance" then
-		handleAdvance(self, state, message)
+		if isBoundedString(message.turn, Net.Limits.maxIdBytes) then
+			accepted = handleAdvance(self, state, message)
+		end
 	elseif message.type == "choose" then
-		handleChoose(self, state, message)
+		if isBoundedString(message.turn, Net.Limits.maxIdBytes) then
+			accepted = handleChoose(self, state, message)
+		end
+	end
+
+	if accepted and state.active then
+		armSessionTimeout(self, state)
 	end
 end
 
--- All completion and cancellation paths meet here.
-function Session._end(self: Session, outcome: Types.SessionOutcome): boolean
+function Session._end(self: Session, outcome: Types.SessionOutcome, notifyClient: boolean): boolean
 	local state = states[self]
 	if not state or not state.active then
 		return false
@@ -714,12 +973,25 @@ function Session._end(self: Session, outcome: Types.SessionOutcome): boolean
 	state.pendingNodeId = nil
 	state.pendingEndResult = nil
 	state.outcome = outcome
+	clearSessionTimeout(state)
 	disconnectDeathMonitoring(state)
 
 	if activeSessions[self.Player] == self then
 		activeSessions[self.Player] = nil
 	end
 
+	if notifyClient then
+		local sendResult = table.pack(pcall(sendOutcome, self, state, outcome))
+		if not sendResult[1] then
+			warn(
+				`[MrDialogue][SERVER_NETWORK_SEND_FAILED] Could not send the final outcome for dialogue "{self.DialogueId}": {safeToString(
+					sendResult[2]
+				)}`
+			)
+		end
+	end
+
+	state.endedEvent:Fire(outcome)
 	return true
 end
 
@@ -727,6 +999,7 @@ Net._connectServer(handleClientMessage)
 
 Players.PlayerRemoving:Connect(function(player)
 	clientReadyPlayers[player] = nil
+	messageRates[player] = nil
 
 	local self = activeSessions[player]
 	local state = if self then states[self] else nil

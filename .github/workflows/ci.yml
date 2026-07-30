@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up tools
+        uses: CompeyDev/setup-rokit@v0.1.2
+
+      - name: Check formatting
+        run: stylua --check src tests
+
+      - name: Lint
+        run: selene src tests
+
+      - name: Build
+        run: |
+          rojo build default.project.json --output MrDialogue.rbxm
+          rojo build test.project.json --output MrDialogueTests.rbxlx

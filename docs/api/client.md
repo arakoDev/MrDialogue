@@ -2,11 +2,20 @@
 
 <span class="mrd-badge mrd-badge--client">Client</span>
 
-On the client, requiring the same package returns the client API.
+On the client, require the package's client entry point:
 
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Client)
+```
+
+The explicit `.Client` entry point preserves complete Luau types. The package root
+remains available as an untyped compatibility shortcut.
+
+```luau
+MrDialogue.Version -- "1.0.0"
+MrDialogue.ProtocolVersion -- 1
+MrDialogue.Limits -- frozen protocol and presentation limits
 ```
 
 ## Lifecycle
@@ -68,7 +77,7 @@ ClientRuntime:IsActive(): boolean
 
 Returns whether this runtime currently has an active dialogue.
 
-[:octicons-code-16: Source](https://github.com/arakoDev/MrDialogue/blob/main/src/Client.luau)
+[:octicons-code-16: Source](https://github.com/arakoDev/MrDialogue/blob/main/src/ClientRuntime.luau)
 
 ## DefaultAdapter
 
@@ -84,7 +93,7 @@ MrDialogue.DefaultAdapter.new(config: DefaultAdapterConfig?): DefaultAdapter
 
 | Config field | Type | Default |
 | --- | --- | --- |
-| `gui` | `ScreenGui?` | Clone `MrDialogue.Assets.DialogueGui` |
+| `gui` | `ScreenGui?` | Reuse `PlayerGui.DialogueGui`, otherwise clone the bundled GUI |
 | `charsPerSecond` | `number?` | `30` |
 | `punctuationPause` | `number?` | `0.15` |
 | `freezeCharacter` | `boolean?` | `true` |
@@ -120,7 +129,7 @@ by the default adapter.
 ### Constructor and events
 
 ```luau
-local typewriter = MrDialogue.Typewriter.new(label: TextLabel)
+local typewriter = MrDialogue.Typewriter.new(label)
 
 typewriter.Completed:Connect(function(runId, outcome)
 	print(runId, outcome)
@@ -145,6 +154,9 @@ typewriter:Destroy(): ()
 reveals all text and fires `Completed` with `skipped`; `Cancel` fires
 `Completed` with `cancelled` without revealing the remainder.
 
+Text must be valid UTF-8 and fit the bounds in `MrDialogue.Limits`. Reveal work per
+Heartbeat is capped so a large frame delay cannot create an unbounded loop.
+
 ```luau
 typewriter:Play("Welcome, traveler!", {
 	charsPerSecond = 36,
@@ -158,3 +170,9 @@ typewriter:Play("Welcome, traveler!", {
 
 The complete custom adapter contract and callback timing are covered in
 [Client interface](../guides/client-interface.md#implement-a-custom-adapter).
+
+Adapter callbacks are synchronous. If an active presentation callback throws or
+yields, the failure is contained, the local session ends once with non-authoritative
+reason `client_error`, and the server is asked to cancel its authoritative session.
+If `OnEnd` itself fails, the runtime logs and contains the failure without repeating
+cleanup or sending a second cancellation.

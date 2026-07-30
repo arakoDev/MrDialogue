@@ -3,19 +3,13 @@
 local Types = require(script.Parent.Types)
 local Actions = require(script.Parent.Actions)
 local Conditions = require(script.Parent.Conditions)
+local Net = require(script.Parent.Net)
 local SessionClass = require(script.Parent.Session)
 
 local Dialogue = {}
 Dialogue.__index = Dialogue
 
-export type Dialogue = {
-	Id: string,
-	Start: (
-		self: Dialogue,
-		player: Player,
-		options: Types.SessionOptions?
-	) -> (SessionClass.Session?, string?),
-}
+export type Dialogue = Types.Dialogue
 
 type Requirement = {
 	kind: "condition" | "action",
@@ -42,7 +36,16 @@ local function fail(message: string): never
 	error(`MrDialogue.new: {message}`, 0)
 end
 
-local function validateArray(value: any, path: string): number
+local function validateMaximumBytes(value: string, maximumBytes: number, path: string)
+	if utf8.len(value) == nil then
+		fail(`{path} must contain valid UTF-8`)
+	end
+	if #value > maximumBytes then
+		fail(`{path} must not exceed {maximumBytes} bytes`)
+	end
+end
+
+local function validateArray(value: any, path: string, maximumEntries: number?): number
 	if type(value) ~= "table" then
 		fail(`{path} must be an array`)
 	end
@@ -61,11 +64,13 @@ local function validateArray(value: any, path: string): number
 	if count ~= highestIndex then
 		fail(`{path} must be a dense array without missing entries`)
 	end
+	if maximumEntries and count > maximumEntries then
+		fail(`{path} must not contain more than {maximumEntries} entries`)
+	end
 
 	return count
 end
 
--- Keep running sessions isolated from later edits to the source definition.
 local function deepCopy(value: any, copies: { [any]: any }): any
 	if type(value) ~= "table" then
 		return value
@@ -92,17 +97,19 @@ local function validateSpec(kind: "condition" | "action", spec: any, path: strin
 	if type(spec.name) ~= "string" or spec.name == "" then
 		fail(`{path}.name must be a non-empty string`)
 	end
+	validateMaximumBytes(spec.name, Net.Limits.maxIdBytes, `{path}.name`)
 	if spec.arguments ~= nil then
-		validateArray(spec.arguments, `{path}.arguments`)
+		validateArray(spec.arguments, `{path}.arguments`, Net.Limits.maxArguments)
 	end
 
-	return { kind = kind, name = spec.name, path = path }
+	return table.freeze({ kind = kind, name = spec.name, path = path }) :: any
 end
 
 local function validateTarget(definition: any, targetId: any, path: string)
 	if type(targetId) ~= "string" or targetId == "" then
 		fail(`{path} must be a node ID`)
 	end
+	validateMaximumBytes(targetId, Net.Limits.maxIdBytes, path)
 	if definition.nodes[targetId] == nil then
 		fail(`{path} points at "{targetId}", which does not exist`)
 	end
@@ -124,6 +131,7 @@ local function validateSpeakers(definition: any)
 		if type(speakerId) ~= "string" or speakerId == "" then
 			fail("definition.speakers keys must be non-empty strings")
 		end
+		validateMaximumBytes(speakerId, Net.Limits.maxIdBytes, "definition.speakers key")
 
 		local path = `speaker "{tostring(speakerId)}"`
 
@@ -137,10 +145,14 @@ local function validateSpeakers(definition: any)
 		if type(name) ~= "string" or name == "" then
 			fail(`{path} must be a table with a non-empty name`)
 		end
+		validateMaximumBytes(name :: string, Net.Limits.maxSpeakerNameBytes, `{path} name`)
 
 		local icon = speaker.icon
 		if icon ~= nil and type(icon) ~= "string" then
 			fail(`{path} icon must be a string`)
+		end
+		if icon ~= nil then
+			validateMaximumBytes(icon :: string, Net.Limits.maxIconBytes, `{path} icon`)
 		end
 
 		local emotionsValue = speaker.emotions
@@ -155,9 +167,15 @@ local function validateSpeakers(definition: any)
 				if type(emotion) ~= "string" or emotion == "" then
 					fail(`{path} emotion keys must be non-empty strings`)
 				end
+				validateMaximumBytes(emotion, Net.Limits.maxIdBytes, `{path} emotion key`)
 				if type(emotionIcon) ~= "string" then
 					fail(`{path} emotion "{tostring(emotion)}" must map to an icon string`)
 				end
+				validateMaximumBytes(
+					emotionIcon :: string,
+					Net.Limits.maxIconBytes,
+					`{path} emotion "{tostring(emotion)}"`
+				)
 			end
 		end
 	end
@@ -167,6 +185,7 @@ local function validateSpeakers(definition: any)
 		if type(defaultSpeaker) ~= "string" or defaultSpeaker == "" then
 			fail("definition.defaultSpeaker must be a non-empty speaker key")
 		end
+		validateMaximumBytes(defaultSpeaker, Net.Limits.maxIdBytes, "definition.defaultSpeaker")
 		if speakers == nil or speakers[defaultSpeaker] == nil then
 			fail(`definition.defaultSpeaker references unknown speaker "{defaultSpeaker}"`)
 		end
@@ -176,6 +195,9 @@ end
 local function validatePresentation(nodeId: string, node: any, definition: any)
 	if node.emotion ~= nil and (type(node.emotion) ~= "string" or node.emotion == "") then
 		fail(`node "{nodeId}" emotion must be a non-empty emotion key`)
+	end
+	if node.emotion ~= nil then
+		validateMaximumBytes(node.emotion, Net.Limits.maxIdBytes, `node "{nodeId}" emotion`)
 	end
 
 	local speakerId = if node.speaker == nil then definition.defaultSpeaker else node.speaker
@@ -189,6 +211,7 @@ local function validatePresentation(nodeId: string, node: any, definition: any)
 	if type(speakerId) ~= "string" then
 		fail(`node "{nodeId}" speaker must be a speaker key or false`)
 	end
+	validateMaximumBytes(speakerId, Net.Limits.maxIdBytes, `node "{nodeId}" speaker`)
 
 	local speakers = definition.speakers
 	local speaker = if speakers then speakers[speakerId] else nil
@@ -210,6 +233,7 @@ local function validateLine(nodeId: string, node: any, definition: any)
 	if type(node.text) ~= "string" then
 		fail(`line node "{nodeId}" text must be a string`)
 	end
+	validateMaximumBytes(node.text, Net.Limits.maxTextBytes, `line node "{nodeId}" text`)
 
 	validatePresentation(nodeId, node, definition)
 
@@ -228,12 +252,15 @@ local function validateChoice(
 		if type(node.text) ~= "string" then
 			fail(`choice node "{nodeId}" text must be a string`)
 		end
+		validateMaximumBytes(node.text, Net.Limits.maxTextBytes, `choice node "{nodeId}" text`)
 		validatePresentation(nodeId, node, definition)
 	elseif node.speaker ~= nil or node.emotion ~= nil then
 		fail(`promptless choice node "{nodeId}" cannot set a speaker or emotion`)
 	end
 
-	if validateArray(node.options, `choice node "{nodeId}" options`) == 0 then
+	if
+		validateArray(node.options, `choice node "{nodeId}" options`, Net.Limits.maxChoices) == 0
+	then
 		fail(`choice node "{nodeId}" must contain at least one option`)
 	end
 
@@ -246,6 +273,7 @@ local function validateChoice(
 		if type(option.id) ~= "string" or option.id == "" then
 			fail(`{path} must have a non-empty id`)
 		end
+		validateMaximumBytes(option.id, Net.Limits.maxIdBytes, `{path} id`)
 		if usedIds[option.id] then
 			fail(`{path} reuses the id "{option.id}"`)
 		end
@@ -254,6 +282,7 @@ local function validateChoice(
 		if type(option.text) ~= "string" then
 			fail(`{path} text must be a string`)
 		end
+		validateMaximumBytes(option.text, Net.Limits.maxTextBytes, `{path} text`)
 		validateTarget(definition, option.next, `{path} next`)
 
 		if option.condition ~= nil then
@@ -306,11 +335,19 @@ function Dialogue.new(definition: any): Dialogue
 	if type(definition.id) ~= "string" or definition.id == "" then
 		fail("definition.id must be a non-empty string")
 	end
+	validateMaximumBytes(definition.id, Net.Limits.maxIdBytes, "definition.id")
 	if type(definition.nodes) ~= "table" then
 		fail("definition.nodes must be a table")
 	end
 	if definition.defaultIcon ~= nil and type(definition.defaultIcon) ~= "string" then
 		fail("definition.defaultIcon must be a string")
+	end
+	if definition.defaultIcon ~= nil then
+		validateMaximumBytes(
+			definition.defaultIcon,
+			Net.Limits.maxIconBytes,
+			"definition.defaultIcon"
+		)
 	end
 	if definition.freezeCharacter ~= nil and type(definition.freezeCharacter) ~= "boolean" then
 		fail("definition.freezeCharacter must be a boolean")
@@ -325,10 +362,16 @@ function Dialogue.new(definition: any): Dialogue
 	validateSpeakers(definition)
 
 	local requirements: { Requirement } = {}
+	local nodeCount = 0
 	for nodeId, node in pairs(definition.nodes) do
+		nodeCount += 1
+		if nodeCount > Net.Limits.maxNodes then
+			fail(`definition.nodes must not contain more than {Net.Limits.maxNodes} nodes`)
+		end
 		if type(nodeId) ~= "string" or nodeId == "" then
 			fail("node IDs must be non-empty strings")
 		end
+		validateMaximumBytes(nodeId, Net.Limits.maxIdBytes, "node ID")
 		if type(node) ~= "table" or not NODE_TYPES[node.type] then
 			fail(`node "{nodeId}" must be a line, choice, branch, action, or end node`)
 		end
@@ -345,6 +388,13 @@ function Dialogue.new(definition: any): Dialogue
 			if node.result ~= nil and type(node.result) ~= "string" then
 				fail(`end node "{nodeId}" result must be a string`)
 			end
+			if node.result ~= nil then
+				validateMaximumBytes(
+					node.result,
+					Net.Limits.maxResultBytes,
+					`end node "{nodeId}" result`
+				)
+			end
 		end
 	end
 
@@ -359,12 +409,13 @@ function Dialogue.new(definition: any): Dialogue
 	return table.freeze(self)
 end
 
--- Definitions may be created before the game registers their handlers.
 function Dialogue.Start(
 	self: DialogueInternal,
 	player: Player,
 	options: Types.SessionOptions?
 ): (SessionClass.Session?, string?)
+	SessionClass._validateStartArguments(player, options)
+
 	for _, requirement in ipairs(self._requirements) do
 		local registered = if requirement.kind == "condition"
 			then Conditions._isRegistered(requirement.name)

@@ -2,6 +2,8 @@
 
 local RunService = game:GetService("RunService")
 
+local Net = require(script.Parent.Net)
+
 local DEFAULT_CHARS_PER_SECOND = 30
 local DEFAULT_PUNCTUATION_PAUSE = 0.15
 
@@ -64,6 +66,10 @@ local function isFinite(value: number): boolean
 end
 
 local function readConfig(config: TypewriterConfig?): (number, number)
+	if config ~= nil and type(config) ~= "table" then
+		error("MrDialogue.Typewriter:Play config must be a table", 3)
+	end
+
 	local charsPerSecond = if config then config.charsPerSecond else nil
 	local punctuationPause = if config then config.punctuationPause else nil
 
@@ -74,7 +80,7 @@ local function readConfig(config: TypewriterConfig?): (number, number)
 		or not isFinite(charsPerSecond)
 		or charsPerSecond <= 0
 	then
-		error("Typewriter charsPerSecond must be a positive number", 3)
+		error("MrDialogue.Typewriter:Play config.charsPerSecond must be a positive number", 3)
 	end
 
 	if punctuationPause == nil then
@@ -84,7 +90,7 @@ local function readConfig(config: TypewriterConfig?): (number, number)
 		or not isFinite(punctuationPause)
 		or punctuationPause < 0
 	then
-		error("Typewriter punctuationPause must be a non-negative number", 3)
+		error("MrDialogue.Typewriter:Play config.punctuationPause must be a non-negative number", 3)
 	end
 
 	return charsPerSecond :: number, punctuationPause :: number
@@ -135,9 +141,14 @@ local function startHeartbeat(state: TypewriterState, run: Run)
 		end
 
 		run.elapsed += deltaTime
-		while run.elapsed >= run.nextDelay do
+		local revealsThisHeartbeat = 0
+		while
+			run.elapsed >= run.nextDelay
+			and revealsThisHeartbeat < Net.Limits.typewriterMaxRevealsPerHeartbeat
+		do
 			run.elapsed -= run.nextDelay
 			run.visibleGraphemes += 1
+			revealsThisHeartbeat += 1
 			state.label.MaxVisibleGraphemes = run.visibleGraphemes
 			state.graphemeRevealedEvent:Fire(run.id, run.visibleGraphemes)
 
@@ -145,7 +156,6 @@ local function startHeartbeat(state: TypewriterState, run: Run)
 				finishRun(state, run, "natural", true)
 				return
 			end
-			-- A listener may have stopped the run.
 			if not isCurrentRun(state, run) then
 				return
 			end
@@ -161,7 +171,7 @@ end
 
 function Typewriter.new(label: TextLabel): Typewriter
 	if typeof(label) ~= "Instance" or not label:IsA("TextLabel") then
-		error("Typewriter.new requires a TextLabel", 2)
+		error("MrDialogue.Typewriter.new requires a TextLabel", 2)
 	end
 
 	local completedEvent = Instance.new("BindableEvent")
@@ -184,11 +194,22 @@ function Typewriter.new(label: TextLabel): Typewriter
 	return table.freeze(self) :: Typewriter
 end
 
--- MaxVisibleGraphemes keeps UTF-8 and RichText intact while the text is revealed.
 function Typewriter.Play(self: Typewriter, text: string, config: TypewriterConfig?): number
 	local state = states[self]
 	if not state or state.destroyed then
-		error("Typewriter has been destroyed", 2)
+		error(
+			"[MrDialogue][TYPEWRITER_DESTROYED] Typewriter:Play cannot be called after Destroy",
+			2
+		)
+	end
+	if type(text) ~= "string" then
+		error("MrDialogue.Typewriter:Play text must be a string", 2)
+	end
+	if #text > Net.Limits.maxTextBytes then
+		error(`MrDialogue.Typewriter:Play text cannot exceed {Net.Limits.maxTextBytes} bytes`, 2)
+	end
+	if utf8.len(text) == nil then
+		error("MrDialogue.Typewriter:Play text must contain valid UTF-8", 2)
 	end
 
 	local charsPerSecond, punctuationPause = readConfig(config)
@@ -206,7 +227,6 @@ function Typewriter.Play(self: Typewriter, text: string, config: TypewriterConfi
 		punctuationPause = punctuationPause,
 	}
 
-	-- Install the new run first so callbacks from the old one cannot affect it.
 	local previousRun = state.currentRun
 	state.currentRun = run
 	if previousRun then
@@ -219,6 +239,13 @@ function Typewriter.Play(self: Typewriter, text: string, config: TypewriterConfi
 	state.label.Text = text
 	-- ContentText excludes RichText markup from the grapheme count.
 	run.graphemes = getGraphemes(state.label.ContentText)
+	if #run.graphemes > Net.Limits.typewriterMaxGraphemes then
+		finishRun(state, run, "cancelled", false)
+		error(
+			`MrDialogue.Typewriter:Play rendered text cannot exceed {Net.Limits.typewriterMaxGraphemes} graphemes`,
+			2
+		)
+	end
 	state.label.MaxVisibleGraphemes = 0
 
 	if #run.graphemes == 0 then
@@ -275,7 +302,6 @@ function Typewriter.Destroy(self: Typewriter)
 		finishRun(state, run, "cancelled", false)
 	end
 
-	-- Let the final Completed event finish dispatching before cleanup.
 	local completedEvent = state.completedEvent
 	local graphemeRevealedEvent = state.graphemeRevealedEvent
 	task.defer(function()

@@ -10,6 +10,7 @@ A `Session` is one run of one dialogue for one player. The server owns it from
 ```luau
 local session, startError = dialogue:Start(player, {
 	npc = workspace.Guide,
+	timeoutSeconds = 120,
 	data = {
 		questId = "find_the_map",
 	},
@@ -32,6 +33,9 @@ Only one active session is allowed per player.
 
 Invalid argument types raise an error because they indicate a programming mistake.
 Expected runtime conflicts are returned as `(nil, message)`.
+
+`timeoutSeconds` controls the inactivity timeout for this run. It resets after every
+accepted client response, defaults to 120 seconds, and cannot exceed 3600 seconds.
 
 ## Inspect a session
 
@@ -57,6 +61,25 @@ end
 ```
 
 While the session is active, `GetOutcome()` returns `nil`.
+
+For event-driven server code, connect `Ended`:
+
+```luau
+session.Ended:Connect(function(outcome)
+	if outcome.status == "completed" then
+		print("Result:", outcome.result)
+	else
+		warn("Cancelled:", outcome.reason)
+	end
+end)
+```
+
+Immediately terminal graphs may finish before `Dialogue:Start()` returns, so also
+check `GetOutcome()` once after connecting.
+
+For a session that opened the client interface, the final client outcome is queued
+before `Ended` fires. An `Ended` listener can therefore start the player's next
+dialogue without racing the previous client session.
 
 Completed outcomes have this shape:
 
@@ -98,8 +121,13 @@ inactive session returns `false`.
 | --- | --- |
 | `manual` | `Session:Cancel()` without a reason |
 | `client_cancelled` | The client cancels or stops its runtime |
+| `client_error` | The client runtime or adapter rejected a callback or payload |
+| `client_restarted` | A newly started client replaced a stale active runtime |
 | `death` | The player's humanoid dies |
 | `player_left` | The player leaves the server |
+| `timeout` | The client did not respond within the session inactivity timeout |
+| `rate_limited` | The client exceeded the dialogue message rate limit |
+| `network_error` | A client presentation or interaction update could not be sent |
 | `no_available_options` | A choice has no valid option or fallback |
 | `resolution_error` | Silent nodes form a cycle |
 | `action_error` | An action throws, yields, fails, or returns an invalid result |
@@ -116,7 +144,9 @@ local dialogue = MrDialogue.new({
 	entry = "start",
 	endDialogueOnDeath = false,
 	nodes = {
-		-- ...
+		start = {
+			type = "end",
+		},
 	},
 })
 ```

@@ -8,7 +8,7 @@ session result.
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Server)
 
 local playerState = {}
 
@@ -156,19 +156,25 @@ script.Parent.Triggered:Connect(function(player)
 		return
 	end
 
-	task.spawn(function()
-		while session:IsActive() do
-			task.wait()
+	local handled = false
+	local function handleOutcome(outcome)
+		if handled then
+			return
 		end
-
-		local outcome = session:GetOutcome()
+		handled = true
 		if outcome and outcome.status == "completed" then
 			print(player.Name, outcome.result)
 		end
-	end)
+	end
+
+	local connection = session.Ended:Connect(handleOutcome)
+	local immediateOutcome = session:GetOutcome()
+	if immediateOutcome then
+		connection:Disconnect()
+		handleOutcome(immediateOutcome)
+	end
 end)
 ```
 
-The polling task is included only to demonstrate `GetOutcome()`. Application code can
-usually react inside actions or a custom adapter instead of creating one polling task
-per conversation.
+Connecting before reading `GetOutcome()` handles both normal and immediately terminal
+sessions without polling or missing a race.

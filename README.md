@@ -13,7 +13,7 @@
 <p>
   <a href="https://mrdialogue.arako.dev/"><img src="https://img.shields.io/badge/docs-mrdialogue.arako.dev-blue?style=flat-square" alt="Documentation"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-0.1.2-blue?style=flat-square" alt="Package version">
+  <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Package version">
 </p>
 
 </div>
@@ -41,7 +41,7 @@ Create a `LocalScript` under `StarterPlayerScripts`:
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Client)
 
 MrDialogue.Start()
 ```
@@ -53,7 +53,7 @@ Create a server `Script` under a `ProximityPrompt`:
 ```luau
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue)
+local MrDialogue = require(ReplicatedStorage.Packages.MrDialogue.Server)
 
 local dialogue = MrDialogue.new({
 	format = 1,
