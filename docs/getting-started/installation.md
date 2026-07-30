@@ -3,42 +3,72 @@
 MrDialogue runs on both the server and client. Install the package in a container
 replicated to both environments, then start its client runtime from a `LocalScript`.
 
-## Wally
+Choose the installation method that fits your project:
 
-Add MrDialogue to the `[dependencies]` section of your `wally.toml`:
+=== "Wally"
 
-```toml
-[dependencies]
-MrDialogue = "arakodev/mrdialogue@1.0.0"
-```
+    ## Wally
 
-Install the dependency:
+    Add MrDialogue to the `[dependencies]` section of your `wally.toml`:
 
-```sh
-wally install
-```
+    ```toml
+    [dependencies]
+    MrDialogue = "arakodev/mrdialogue@1.0.0"
+    ```
 
-Sync the generated `Packages` directory into `ReplicatedStorage` with Rojo. A typical
-project mapping looks like this:
+    Install the dependency:
 
-```json
-{
-  "name": "MyExperience",
-  "tree": {
-    "$className": "DataModel",
-    "ReplicatedStorage": {
-      "Packages": {
-        "$path": "Packages"
+    ```sh
+    wally install
+    ```
+
+    Sync the generated `Packages` directory into `ReplicatedStorage` with Rojo. A
+    typical project mapping looks like this:
+
+    ```json
+    {
+      "name": "MyExperience",
+      "tree": {
+        "$className": "DataModel",
+        "ReplicatedStorage": {
+          "Packages": {
+            "$path": "Packages"
+          }
+        }
       }
     }
-  }
-}
-```
+    ```
 
-!!! tip "Keep the package shared"
+    !!! tip "Keep the package shared"
 
-    Do not install MrDialogue as a server-only dependency. The server API owns
-    dialogue state, while the client API owns presentation and player input.
+        Do not install MrDialogue as a server-only dependency. The server API owns
+        dialogue state, while the client API owns presentation and player input.
+
+=== "Creator Store"
+
+    ## Creator Store
+
+    1. Open [MrDialogue v1.0.0 on the Roblox Creator Store][creator-store] and add
+       it to your inventory.
+    2. Insert the model into your experience from the Studio Toolbox.
+    3. Create a folder named `Packages` inside `ReplicatedStorage` if it does not
+       already exist.
+    4. Move the `MrDialogue` **ModuleScript** from the inserted model into
+       `ReplicatedStorage.Packages`.
+
+    Your Explorer hierarchy should look like this:
+
+    ```text
+    ReplicatedStorage
+    └── Packages
+        └── MrDialogue
+    ```
+
+    The outer model, `GUIDE`, and `ThumbnailCamera` are not required at runtime.
+    Once the ModuleScript is in `Packages`, you can remove them from your
+    experience.
+
+[creator-store]: https://create.roblox.com/store/asset/105201219018918/MrDialogue-v100
 
 ## Start the server
 

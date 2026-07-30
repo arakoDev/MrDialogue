@@ -21,14 +21,10 @@ includes a client interface and supports custom adapters.
 
 ## Installation
 
-Add MrDialogue to `wally.toml`:
+Install MrDialogue with Wally or get the model from the Roblox Creator Store:
 
-```toml
-[dependencies]
-MrDialogue = "arakodev/mrdialogue@1.0.0"
-```
-
-Then run `wally install` and map the package into `ReplicatedStorage`.
+[Install with Wally](/getting-started/installation/#__tabbed_1_1){ .md-button .md-button--primary }
+[Get it from Creator Store](/getting-started/installation/#__tabbed_1_2){ .md-button .mrd-button--secondary }
 
 ## Example
 

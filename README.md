@@ -7,11 +7,12 @@
 <p>A dialogue package for Roblox.</p>
 
 <p>
-  <a href="https://wally.run/package/arakodev/mrdialogue"><img src="./assets/wally.svg" alt="Wally" height="24"></a>
+  <a href="https://wally.run/package/arakodev/mrdialogue" target="_blank" rel="noopener noreferrer"><img src="./assets/wally.svg" alt="Wally" height="24"></a>
+  <a href="https://create.roblox.com/store/asset/105201219018918/MrDialogue-v100" target="_blank" rel="noopener noreferrer"><img src="./assets/creatorhub.svg" alt="Creator Store" height="24"></a>
 </p>
 
 <p>
-  <a href="https://mrdialogue.arako.dev/"><img src="https://img.shields.io/badge/docs-mrdialogue.arako.dev-blue?style=flat-square" alt="Documentation"></a>
+  <a href="https://mrdialogue.arako.dev/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/docs-mrdialogue.arako.dev-blue?style=flat-square" alt="Documentation"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Package version">
 </p>
