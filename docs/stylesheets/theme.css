@@ -118,9 +118,17 @@
 }
 
 [data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  border-color: var(--mrd-blue);
+  background-color: var(--mrd-blue);
+  color: var(--mrd-white);
+  -webkit-text-fill-color: var(--mrd-white);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:is(:hover, :focus) {
   border-color: var(--mrd-blue-light);
   background-color: var(--mrd-blue-light);
   color: var(--mrd-black);
+  -webkit-text-fill-color: var(--mrd-black);
 }
 
 [data-md-color-scheme="slate"] .md-typeset a:not(.md-button) {
