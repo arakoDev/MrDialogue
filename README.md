@@ -14,7 +14,7 @@
 <p>
   <a href="https://mrdialogue.arako.dev/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/docs-mrdialogue.arako.dev-blue?style=flat-square" alt="Documentation"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Package version">
+  <a href="https://github.com/arakoDev/MrDialogue/releases/tag/v1.0.0"><img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Package version"></a>
 </p>
 
 </div>

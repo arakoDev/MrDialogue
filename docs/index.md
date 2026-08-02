@@ -19,6 +19,19 @@ MrDialogue defines conversations as graphs composed of line, choice, branch, act
 and end nodes. Dialogue state, conditions, and actions run on the server. The package
 includes a client interface and supports custom adapters.
 
+## Showcase
+
+See MrDialogue in action in this short dialogue showcase.
+
+<div class="mrd-video">
+  <iframe
+    src="https://www.youtube-nocookie.com/embed/NQ5bXA1-yWE"
+    title="MrDialogue dialogue showcase"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    allowfullscreen>
+  </iframe>
+</div>
+
 ## Installation
 
 Install MrDialogue with Wally or get the model from the Roblox Creator Store:

@@ -31,7 +31,6 @@ theme:
         name: Switch to light mode
   features:
     - content.action.edit
-    - content.action.view
     - content.code.copy
     - content.tabs.link
     - navigation.footer
